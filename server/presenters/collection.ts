@@ -25,6 +25,7 @@ export default async function presentCollection(
     url: collection.path,
     urlId: collection.urlId,
     name: collection.name,
+    parentCollectionId: collection.parentCollectionId,
     data: asData
       ? await DocumentHelper.toJSON(
           collection,

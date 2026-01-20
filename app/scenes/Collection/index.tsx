@@ -23,6 +23,7 @@ import PlaceholderList from "~/components/List/Placeholder";
 import PaginatedDocumentList from "~/components/PaginatedDocumentList";
 import PinnedDocuments from "~/components/PinnedDocuments";
 import PlaceholderText from "~/components/PlaceholderText";
+import SubCollections from "~/components/SubCollections";
 import Scene from "~/components/Scene";
 import { editCollection } from "~/actions/definitions/collections";
 import useCommandBarActions from "~/hooks/useCommandBarActions";
@@ -182,6 +183,11 @@ const CollectionScene = observer(function CollectionScene_() {
             pins={pins}
             canUpdate={can.update}
             placeholderCount={count}
+          />
+
+          <SubCollections
+            collection={collection}
+            canCreateChildCollection={can.createChildCollection}
           />
 
           <Content>

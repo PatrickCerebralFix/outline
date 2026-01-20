@@ -14,12 +14,31 @@ import type Document from "~/models/Document";
 import type GroupMembership from "~/models/GroupMembership";
 import type Star from "~/models/Star";
 import UserMembership from "~/models/UserMembership";
+import CollectionIcon from "~/components/Icons/CollectionIcon";
 import ConfirmMoveDialog from "~/components/ConfirmMoveDialog";
 import useCurrentUser from "~/hooks/useCurrentUser";
 import usePolicy from "~/hooks/usePolicy";
 import useStores from "~/hooks/useStores";
 import { AuthorizationError } from "~/utils/errors";
 import { useSidebarLabelAndIcon } from "./useSidebarLabelAndIcon";
+
+/**
+ * Checks if a collection is a descendant of another collection.
+ *
+ * @param collection The potential descendant collection.
+ * @param ancestorId The ID of the potential ancestor collection.
+ * @returns True if the collection is a descendant of the ancestor.
+ */
+function isDescendantOf(collection: Collection, ancestorId: string): boolean {
+  let current = collection.parentCollection;
+  while (current) {
+    if (current.id === ancestorId) {
+      return true;
+    }
+    current = current.parentCollection;
+  }
+  return false;
+}
 
 export type DragObject = NavigationNode & {
   depth: number;
@@ -283,6 +302,113 @@ export function useDropToChangeCollection(
       canDrop: monitor.canDrop(),
     }),
   });
+}
+
+/**
+ * Hook for shared logic that allows dropping collections onto another collection
+ * to nest them as a sub-collection.
+ *
+ * @param collection The target collection that will become the parent.
+ * @param expandNode A function to expand the collection to show children.
+ * @param parentRef A ref to the parent element used to detect when hovering stops.
+ */
+export function useDropToNestCollection(
+  collection: Collection,
+  expandNode: () => void,
+  parentRef: React.RefObject<HTMLDivElement>
+) {
+  const { t } = useTranslation();
+  const { collections } = useStores();
+  const can = usePolicy(collection);
+  const startHover = useHover(parentRef, expandNode);
+
+  return useDrop<
+    DragObject,
+    Promise<void>,
+    { isOverCollection: boolean; canDropCollection: boolean }
+  >({
+    accept: "collection",
+    drop: async (item, monitor) => {
+      if (monitor.didDrop()) {
+        return;
+      }
+
+      const draggedCollection = collections.get(item.id);
+      if (!draggedCollection) {
+        return;
+      }
+
+      try {
+        // Move the collection to become a child of the target collection
+        await collections.move(
+          item.id,
+          fractionalIndex(null, null),
+          collection.id
+        );
+        expandNode();
+      } catch (_err) {
+        toast.error(
+          t("{{ collectionName }} could not be moved", {
+            collectionName: item.title,
+          })
+        );
+      }
+    },
+    canDrop: (item) => {
+      // Cannot drop on itself
+      if (item.id === collection.id) {
+        return false;
+      }
+
+      // Cannot drop a collection onto its own descendant (would create circular reference)
+      if (isDescendantOf(collection, item.id)) {
+        return false;
+      }
+
+      // Cannot drop if already a child of this collection
+      const draggedCollection = collections.get(item.id);
+      if (draggedCollection?.parentCollectionId === collection.id) {
+        return false;
+      }
+
+      // Check if user can create child collections on the target
+      return !!can.createChildCollection;
+    },
+    hover: (_, monitor) => {
+      if (monitor.canDrop() && monitor.isOver({ shallow: true })) {
+        startHover();
+      }
+    },
+    collect: (monitor) => ({
+      isOverCollection: monitor.isOver({ shallow: true }),
+      canDropCollection: monitor.canDrop(),
+    }),
+  });
+}
+
+/**
+ * Hook for shared logic that allows dragging collections.
+ *
+ * @param collection The Collection model to drag.
+ */
+export function useDragCollection(collection: Collection) {
+  const [{ isDragging }, draggableRef, preview] = useDrag({
+    type: "collection",
+    item: () => ({
+      id: collection.id,
+      title: collection.name,
+      icon: <CollectionIcon collection={collection} />,
+    }),
+    collect: (monitor) => ({
+      isDragging: monitor.isDragging(),
+    }),
+  });
+
+  React.useEffect(() => {
+    preview(getEmptyImage(), { captureDraggingState: false });
+  }, [preview]);
+
+  return [{ isDragging }, draggableRef] as const;
 }
 
 /**

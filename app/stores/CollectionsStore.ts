@@ -37,6 +37,26 @@ export default class CollectionsStore extends Store<Collection> {
     return this.orderedData.filter((c) => c.isActive);
   }
 
+  /**
+   * Returns root-level collections (collections without a parent).
+   */
+  @computed
+  get rootCollections(): Collection[] {
+    return this.orderedData.filter((c) => !c.parentCollectionId && c.isActive);
+  }
+
+  /**
+   * Returns collections that are children of the specified parent.
+   *
+   * @param parentId The parent collection ID
+   * @returns Array of child collections
+   */
+  getChildCollections(parentId: string): Collection[] {
+    return this.orderedData.filter(
+      (c) => c.parentCollectionId === parentId && c.isActive
+    );
+  }
+
   @computed
   get orderedData(): Collection[] {
     let collections = Array.from(this.data.values());
@@ -95,17 +115,55 @@ export default class CollectionsStore extends Store<Collection> {
     });
   };
 
+  /**
+   * Searches collections by name.
+   *
+   * @param query The search query to match against collection names.
+   * @param options.limit Maximum number of results to return.
+   * @param options.collectionId Filter to only include children of this collection.
+   * @param options.includeNested When true, include all nested. When false, only direct children.
+   * @returns A promise that resolves to an array of matching collections.
+   */
   @action
-  move = async (collectionId: string, index: string) => {
+  search = async (
+    query: string,
+    options?: { limit?: number; collectionId?: string; includeNested?: boolean }
+  ): Promise<Collection[]> => {
+    const res = await client.post("/collections.search", {
+      query,
+      limit: options?.limit,
+      collectionId: options?.collectionId,
+      includeNested: options?.includeNested,
+    });
+    invariant(res?.data, "Collection search results not available");
+    return runInAction("CollectionsStore#search", () => {
+      res.data.forEach(this.add);
+      this.addPolicies(res.policies);
+      return res.data.map((data: { id: string }) => this.get(data.id)!);
+    });
+  };
+
+  @action
+  move = async (
+    collectionId: string,
+    index: string,
+    parentCollectionId?: string | null
+  ) => {
     const res = await client.post("/collections.move", {
       id: collectionId,
       index,
+      parentCollectionId,
     });
     invariant(res?.success, "Collection could not be moved");
     const collection = this.get(collectionId);
 
     if (collection) {
       collection.updateIndex(res.data.index);
+      runInAction("Collection#move", () => {
+        if (res.data.parentCollectionId !== undefined) {
+          collection.parentCollectionId = res.data.parentCollectionId;
+        }
+      });
     }
   };
 

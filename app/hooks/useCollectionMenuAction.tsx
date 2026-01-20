@@ -14,6 +14,7 @@ import {
   subscribeCollection,
   unsubscribeCollection,
   createDocument,
+  createSubCollection,
   exportCollection,
   importDocument,
   sortCollection,
@@ -46,6 +47,7 @@ export function useCollectionMenuAction({ collectionId, onRename }: Props) {
       unsubscribeCollection,
       ActionSeparator,
       createDocument,
+      createSubCollection,
       importDocument,
       ActionSeparator,
       createAction({

@@ -313,6 +313,21 @@ class Collection extends ParanoidModel<
   @Column(DataType.JSONB)
   sourceMetadata: SourceMetadata | null;
 
+  // parent collection relationship for nested collections
+
+  /** The parent collection that this collection is nested within. */
+  @BelongsTo(() => Collection, "parentCollectionId")
+  parentCollection: Collection | null;
+
+  /** The ID of the parent collection, if this collection is nested. */
+  @ForeignKey(() => Collection)
+  @Column(DataType.UUID)
+  parentCollectionId: string | null;
+
+  /** Child collections nested within this collection. */
+  @HasMany(() => Collection, "parentCollectionId")
+  childCollections: Collection[];
+
   // getters
 
   /** The frontend path to this collection. */
@@ -388,6 +403,20 @@ class Collection extends ParanoidModel<
   }
 
   @BeforeDestroy
+  static async checkHasChildCollections(model: Collection) {
+    const childCount = await this.count({
+      where: {
+        parentCollectionId: model.id,
+      },
+    });
+    if (childCount > 0) {
+      throw ValidationError(
+        "Cannot delete collection with child collections. Delete or move the child collections first."
+      );
+    }
+  }
+
+  @BeforeDestroy
   static async deleteDocuments(model: Collection, ctx: APIContext["context"]) {
     await Document.update(
       {
@@ -412,13 +441,16 @@ class Collection extends ParanoidModel<
     if (model.index) {
       model.index = await removeIndexCollision(model.teamId, model.index, {
         transaction: options.transaction,
+        parentCollectionId: model.parentCollectionId,
       });
       return;
     }
 
-    const firstCollectionForTeam = await this.findOne({
+    // Find the first collection at the same level (same parent) within the team
+    const firstCollectionAtLevel = await this.findOne({
       where: {
         teamId: model.teamId,
+        parentCollectionId: model.parentCollectionId ?? null,
       },
       order: [
         // using LC_COLLATE:"C" because we need byte order to drive the sorting
@@ -428,7 +460,7 @@ class Collection extends ParanoidModel<
       transaction: options.transaction,
     });
 
-    model.index = fractionalIndex(null, firstCollectionForTeam?.index ?? null);
+    model.index = fractionalIndex(null, firstCollectionAtLevel?.index ?? null);
   }
 
   @AfterCreate
@@ -461,7 +493,50 @@ class Collection extends ParanoidModel<
     ) {
       model.index = await removeIndexCollision(model.teamId, model.index!, {
         transaction: options.transaction,
+        parentCollectionId: model.parentCollectionId,
       });
+    }
+  }
+
+  @BeforeUpdate
+  static async checkParentCollection(
+    model: Collection,
+    options: UpdateOptions<Collection>
+  ) {
+    if (
+      model.previous("parentCollectionId") === model.parentCollectionId ||
+      !model.parentCollectionId
+    ) {
+      return;
+    }
+
+    // Prevent nesting a collection inside itself
+    if (model.parentCollectionId === model.id) {
+      throw ValidationError(
+        "Infinite loop detected, cannot nest a collection inside itself"
+      );
+    }
+
+    // Ensure parent collection is in the same team
+    const parentCollection = await this.findByPk(model.parentCollectionId, {
+      transaction: options.transaction,
+    });
+
+    if (!parentCollection || parentCollection.teamId !== model.teamId) {
+      throw ValidationError(
+        "Parent collection must belong to the same team"
+      );
+    }
+
+    // Prevent nesting a collection inside one of its descendants
+    const childCollectionIds = await model.findAllChildCollectionIds({
+      transaction: options.transaction,
+    });
+
+    if (childCollectionIds.includes(model.parentCollectionId)) {
+      throw ValidationError(
+        "Infinite loop detected, cannot nest a collection inside a descendant"
+      );
     }
   }
 
@@ -956,6 +1031,40 @@ class Collection extends ParanoidModel<
     }
 
     return this;
+  };
+
+  /**
+   * Calculate all collection ids that are descendants of this collection.
+   *
+   * @param options FindOptions
+   * @returns A promise that resolves to a list of collection ids
+   */
+  findAllChildCollectionIds = async (
+    options?: FindOptions<Collection>
+  ): Promise<string[]> => {
+    const CollectionModel = this.constructor as typeof Collection;
+
+    const findAllChildren = async (
+      ...parentCollectionIds: string[]
+    ): Promise<string[]> => {
+      const childCollections = await CollectionModel.findAll({
+        attributes: ["id"],
+        where: {
+          parentCollectionId: parentCollectionIds,
+        },
+        ...options,
+      });
+
+      const childIds = childCollections.map((c) => c.id);
+
+      if (childIds.length > 0) {
+        return [...childIds, ...(await findAllChildren(...childIds))];
+      }
+
+      return childIds;
+    };
+
+    return findAllChildren(this.id);
   };
 
   /**

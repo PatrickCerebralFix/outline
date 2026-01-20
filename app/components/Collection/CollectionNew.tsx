@@ -9,16 +9,22 @@ import { CollectionForm } from "./CollectionForm";
 
 type Props = {
   onSubmit: () => void;
+  /** Parent collection ID when creating a sub-collection */
+  parentCollectionId?: string;
 };
 
 export const CollectionNew = observer(function CollectionNew_({
   onSubmit,
+  parentCollectionId,
 }: Props) {
   const { collections } = useStores();
   const handleSubmit = useCallback(
     async (data: FormData) => {
       try {
-        const collection = await collections.save(data);
+        const collection = await collections.save({
+          ...data,
+          parentCollectionId,
+        });
         // Avoid flash of loading state for the new collection, we know it's empty.
         runInAction(() => {
           collection.documents = [];
@@ -29,7 +35,7 @@ export const CollectionNew = observer(function CollectionNew_({
         toast.error(error.message);
       }
     },
-    [collections, onSubmit]
+    [collections, onSubmit, parentCollectionId]
   );
 
   return <CollectionForm handleSubmit={handleSubmit} />;

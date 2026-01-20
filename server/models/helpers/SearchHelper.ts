@@ -46,6 +46,8 @@ type SearchOptions = {
   query?: string;
   /** Limit results to a collection. Authorization is presumed to have been done before passing to this helper. */
   collectionId?: string | null;
+  /** Limit results to multiple collections. Authorization is presumed to have been done before passing to this helper. */
+  collectionIds?: string[];
   /** Limit results to a shared document. */
   share?: Share;
   /** Limit results to a date range. */
@@ -568,17 +570,29 @@ export default class SearchHelper {
     }
 
     // Ensure we're filtering by the users accessible collections. If
-    // collectionId is passed as an option it is assumed that the authorization
-    // has already been done in the router
-    const collectionIds = options.collectionId
-      ? [options.collectionId]
-      : await model.collectionIds();
+    // collectionId or collectionIds are passed as options it is assumed that
+    // the authorization has already been done in the router
+    const userCollectionIds = await model.collectionIds();
 
-    if (options.collectionId) {
+    // Determine which collection IDs to filter by
+    let filterCollectionIds: string[];
+    if (options.collectionIds) {
+      // Filter by multiple collections (intersect with user's accessible collections)
+      filterCollectionIds = options.collectionIds.filter((id) =>
+        userCollectionIds.includes(id)
+      );
+      where[Op.and].push({ collectionId: filterCollectionIds });
+    } else if (options.collectionId) {
+      // Filter by single collection (backwards compatibility)
+      filterCollectionIds = [options.collectionId];
       where[Op.and].push({ collectionId: options.collectionId });
+    } else {
+      // No specific collection filter, use all accessible collections
+      filterCollectionIds = userCollectionIds;
     }
-    if (collectionIds.length) {
-      where[Op.or].push({ collectionId: collectionIds });
+
+    if (filterCollectionIds.length) {
+      where[Op.or].push({ collectionId: filterCollectionIds });
     }
 
     if (options.dateFilter) {

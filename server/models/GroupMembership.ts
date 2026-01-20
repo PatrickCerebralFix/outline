@@ -169,6 +169,42 @@ class GroupMembership extends ParanoidModel<
   }
 
   /**
+   * Copy group memberships from one collection to another (for permission inheritance).
+   *
+   * @param where The where clause to find the group memberships to copy.
+   * @param collection The collection to copy the group memberships to.
+   * @param options Additional options to pass to the query.
+   */
+  public static async copyToCollection(
+    where: WhereOptions<GroupMembership>,
+    collection: Collection,
+    options: SaveOptions
+  ) {
+    const { transaction } = options;
+    const groupMemberships = await this.findAll({
+      where: {
+        ...where,
+        sourceId: null, // Only copy explicit memberships, not inherited ones
+      },
+      transaction,
+    });
+    await Promise.all(
+      groupMemberships.map((membership) =>
+        this.create(
+          {
+            collectionId: collection.id,
+            groupId: membership.groupId,
+            sourceId: membership.id,
+            permission: membership.permission,
+            createdById: membership.createdById,
+          },
+          { transaction, hooks: false }
+        )
+      )
+    );
+  }
+
+  /**
    * Find the root membership for a document and (optionally) group.
    *
    * @param documentId The document ID to find the membership for.
@@ -214,6 +250,18 @@ class GroupMembership extends ParanoidModel<
   }
 
   @AfterCreate
+  static async createSourcedMembershipsForCollection(
+    model: GroupMembership,
+    options: SaveOptions<GroupMembership>
+  ) {
+    if (model.sourceId || !model.collectionId) {
+      return;
+    }
+
+    return this.recreateSourcedMembershipsForCollection(model, options);
+  }
+
+  @AfterCreate
   static async publishAddGroupEventAfterCreate(
     model: GroupMembership,
     context: APIContext["context"]
@@ -230,6 +278,33 @@ class GroupMembership extends ParanoidModel<
     options: SaveOptions<GroupMembership>
   ) {
     if (model.sourceId || !model.documentId) {
+      return;
+    }
+
+    const { transaction } = options;
+
+    if (model.changed("permission")) {
+      await this.update(
+        {
+          permission: model.permission,
+        },
+        {
+          where: {
+            groupId: model.groupId,
+            sourceId: model.id,
+          },
+          transaction,
+        }
+      );
+    }
+  }
+
+  @AfterUpdate
+  static async updateSourcedMembershipsForCollection(
+    model: GroupMembership,
+    options: SaveOptions<GroupMembership>
+  ) {
+    if (model.sourceId || !model.collectionId) {
       return;
     }
 
@@ -298,6 +373,25 @@ class GroupMembership extends ParanoidModel<
     options: DestroyOptions<GroupMembership>
   ) {
     if (model.sourceId || !model.documentId) {
+      return;
+    }
+
+    const { transaction } = options;
+    await this.destroy({
+      where: {
+        groupId: model.groupId,
+        sourceId: model.id,
+      },
+      transaction,
+    });
+  }
+
+  @AfterDestroy
+  static async destroySourcedMembershipsForCollection(
+    model: GroupMembership,
+    options: DestroyOptions<GroupMembership>
+  ) {
+    if (model.sourceId || !model.collectionId) {
       return;
     }
 
@@ -381,6 +475,71 @@ class GroupMembership extends ParanoidModel<
           hooks: false,
         }
       );
+    }
+  }
+
+  /**
+   * Recreate all sourced permissions for a collection membership.
+   * This propagates permissions to all child collections that don't have explicit overrides.
+   */
+  static async recreateSourcedMembershipsForCollection(
+    model: GroupMembership,
+    options: SaveOptions<GroupMembership>
+  ) {
+    if (!model.collectionId) {
+      return;
+    }
+    const { transaction } = options;
+
+    // Remove existing inherited memberships from this source
+    await this.destroy({
+      where: {
+        groupId: model.groupId,
+        sourceId: model.id,
+      },
+      transaction,
+    });
+
+    const collection = await Collection.findByPk(model.collectionId, {
+      transaction,
+    });
+    if (!collection) {
+      return;
+    }
+
+    const childCollectionIds = await collection.findAllChildCollectionIds({
+      transaction,
+    });
+
+    for (const childCollectionId of childCollectionIds) {
+      // Check if the child collection has an explicit membership for this group
+      const existingMembership = await this.findOne({
+        where: {
+          collectionId: childCollectionId,
+          groupId: model.groupId,
+          sourceId: null, // Explicit membership, not inherited
+        },
+        transaction,
+      });
+
+      // Only create inherited membership if no explicit override exists
+      if (!existingMembership) {
+        await this.create(
+          {
+            collectionId: childCollectionId,
+            groupId: model.groupId,
+            permission: model.permission,
+            sourceId: model.id,
+            createdById: model.createdById,
+            createdAt: model.createdAt,
+            updatedAt: model.updatedAt,
+          },
+          {
+            transaction,
+            hooks: false,
+          }
+        );
+      }
     }
   }
 

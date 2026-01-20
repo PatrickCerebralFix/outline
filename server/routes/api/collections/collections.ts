@@ -43,7 +43,7 @@ import { RateLimiterStrategy } from "@server/utils/RateLimiter";
 import { collectionIndexing } from "@server/utils/indexing";
 import pagination from "../middlewares/pagination";
 import * as T from "./schema";
-import { InvalidRequestError } from "@server/errors";
+import { InvalidRequestError, NotFoundError } from "@server/errors";
 
 const router = new Router();
 
@@ -56,6 +56,7 @@ router.post(
     const { transaction } = ctx.state;
     const {
       name,
+      parentCollectionId,
       color,
       description,
       data,
@@ -70,8 +71,18 @@ router.post(
     const { user } = ctx.state.auth;
     authorize(user, "createCollection", user.team);
 
+    // If creating a child collection, verify access to parent
+    if (parentCollectionId) {
+      const parentCollection = await Collection.findByPk(parentCollectionId, {
+        userId: user.id,
+        transaction,
+      });
+      authorize(user, "createChildCollection", parentCollection);
+    }
+
     const collection = Collection.build({
       name,
+      parentCollectionId: parentCollectionId ?? null,
       content: data,
       description: data ? undefined : description,
       icon,
@@ -90,6 +101,20 @@ router.post(
     }
 
     await collection.saveWithCtx(ctx);
+
+    // Copy permissions from parent collection if this is a child collection
+    if (parentCollectionId) {
+      await UserMembership.copyToCollection(
+        { collectionId: parentCollectionId },
+        collection,
+        { transaction }
+      );
+      await GroupMembership.copyToCollection(
+        { collectionId: parentCollectionId },
+        collection,
+        { transaction }
+      );
+    }
 
     // we must reload the collection to get memberships for policy presenter
     const reloaded = await Collection.findByPk(collection.id, {
@@ -707,7 +732,8 @@ router.post(
   pagination(),
   transaction(),
   async (ctx: APIContext<T.CollectionsListReq>) => {
-    const { includeListOnly, query, statusFilter } = ctx.input.body;
+    const { includeListOnly, query, statusFilter, parentCollectionId } =
+      ctx.input.body;
     const { user } = ctx.state.auth;
     const { transaction } = ctx.state;
     const collectionIds = await user.collectionIds({ transaction });
@@ -724,6 +750,13 @@ router.post(
         },
       ],
     };
+
+    // Filter by parent collection (null means root-level only)
+    if (parentCollectionId !== undefined) {
+      where[Op.and].push({
+        parentCollectionId: parentCollectionId ?? { [Op.is]: null },
+      });
+    }
 
     if (!statusFilter) {
       where[Op.and].push({ archivedAt: { [Op.eq]: null } });
@@ -802,6 +835,77 @@ router.post(
 
     ctx.body = {
       pagination: { ...ctx.state.pagination, total },
+      data: await Promise.all(
+        collections.map((collection) => presentCollection(ctx, collection))
+      ),
+      policies: presentPolicies(user, collections),
+    };
+  }
+);
+
+router.post(
+  "collections.search",
+  auth(),
+  validate(T.CollectionsSearchSchema),
+  async (ctx: APIContext<T.CollectionsSearchReq>) => {
+    const { query, limit, collectionId, includeNested } = ctx.input.body;
+    const { user } = ctx.state.auth;
+    const userCollectionIds = await user.collectionIds();
+
+    // Determine which collection IDs to search and any parent filter
+    let searchableCollectionIds = userCollectionIds;
+    let parentCollectionFilter: string | undefined;
+
+    if (collectionId) {
+      const parentCollection = await Collection.findByPk(collectionId, {
+        userId: user.id,
+      });
+      if (!parentCollection) {
+        throw NotFoundError("Collection not found");
+      }
+      authorize(user, "read", parentCollection);
+
+      if (includeNested) {
+        // Get all descendant collection IDs
+        const childCollectionIds =
+          await parentCollection.findAllChildCollectionIds();
+        searchableCollectionIds = childCollectionIds.filter((id) =>
+          userCollectionIds.includes(id)
+        );
+
+        if (searchableCollectionIds.length === 0) {
+          ctx.body = { data: [], policies: [] };
+          return;
+        }
+      } else {
+        // Only direct children (parentCollectionId equals the selected collection)
+        parentCollectionFilter = collectionId;
+      }
+    }
+
+    const collections = await Collection.scope({
+      method: ["withMembership", user.id],
+    }).findAll({
+      where: {
+        teamId: user.teamId,
+        id: searchableCollectionIds,
+        deletedAt: { [Op.eq]: null },
+        archivedAt: { [Op.eq]: null },
+        ...(parentCollectionFilter && {
+          parentCollectionId: parentCollectionFilter,
+        }),
+        [Op.and]: [
+          Sequelize.literal(
+            `unaccent(LOWER(name)) like unaccent(LOWER(:query))`
+          ),
+        ],
+      },
+      replacements: { query: `%${query}%` },
+      order: [["updatedAt", "DESC"]],
+      limit,
+    });
+
+    ctx.body = {
       data: await Promise.all(
         collections.map((collection) => presentCollection(ctx, collection))
       ),
@@ -940,7 +1044,7 @@ router.post(
   transaction(),
   async (ctx: APIContext<T.CollectionsMoveReq>) => {
     const { transaction } = ctx.state;
-    const { id, index } = ctx.input.body;
+    const { id, index, parentCollectionId } = ctx.input.body;
     const { user } = ctx.state.auth;
 
     let collection = await Collection.findByPk(id, {
@@ -949,18 +1053,55 @@ router.post(
     });
     authorize(user, "move", collection);
 
-    collection = await collection.updateWithCtx(
-      ctx,
-      { index },
-      {
-        name: "move",
+    const parentChanged =
+      parentCollectionId !== undefined &&
+      parentCollectionId !== collection.parentCollectionId;
+
+    // Validate new parent if specified
+    if (parentChanged) {
+      if (parentCollectionId) {
+        const newParent = await Collection.findByPk(parentCollectionId, {
+          userId: user.id,
+          transaction,
+        });
+        authorize(user, "createChildCollection", newParent);
+
+        // Check for circular reference (can't move into own descendant)
+        const childIds = await collection.findAllChildCollectionIds({
+          transaction,
+        });
+        if (childIds.includes(parentCollectionId)) {
+          throw InvalidRequestError(
+            "Cannot move collection into its own descendant"
+          );
+        }
       }
-    );
+    }
+
+    const updateData: { index: string; parentCollectionId?: string | null } = {
+      index,
+    };
+    if (parentChanged) {
+      updateData.parentCollectionId = parentCollectionId ?? null;
+    }
+
+    collection = await collection.updateWithCtx(ctx, updateData, {
+      name: "move",
+    });
+
+    // Recalculate inherited permissions if parent changed
+    if (parentChanged) {
+      const collectionPermissionRecalculator = (
+        await import("@server/commands/collectionPermissionRecalculator")
+      ).default;
+      await collectionPermissionRecalculator({ collection, transaction });
+    }
 
     ctx.body = {
       success: true,
       data: {
         index: collection.index,
+        parentCollectionId: collection.parentCollectionId,
       },
     };
   }

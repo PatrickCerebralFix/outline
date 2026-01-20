@@ -1010,17 +1010,31 @@ router.post(
   rateLimiter(RateLimiterStrategy.OneHundredPerMinute),
   validate(T.DocumentsSearchTitlesSchema),
   async (ctx: APIContext<T.DocumentsSearchTitlesReq>) => {
-    const { query, statusFilter, dateFilter, collectionId, userId } =
-      ctx.input.body;
+    const {
+      query,
+      statusFilter,
+      dateFilter,
+      collectionId,
+      includeChildCollections,
+      userId,
+    } = ctx.input.body;
     const { offset, limit } = ctx.state.pagination;
     const { user } = ctx.state.auth;
     let collaboratorIds = undefined;
+    let collectionIds: string[] | undefined = undefined;
 
     if (collectionId) {
       const collection = await Collection.findByPk(collectionId, {
         userId: user.id,
       });
       authorize(user, "readDocument", collection);
+
+      if (includeChildCollections) {
+        const childCollectionIds = await collection.findAllChildCollectionIds();
+        collectionIds = [collectionId, ...childCollectionIds];
+      } else {
+        collectionIds = [collectionId];
+      }
     }
 
     if (userId) {
@@ -1031,7 +1045,7 @@ router.post(
       query,
       dateFilter,
       statusFilter,
-      collectionId,
+      collectionIds,
       collaboratorIds,
       offset,
       limit,
@@ -1059,6 +1073,7 @@ router.post(
     const {
       query,
       collectionId,
+      includeChildCollections,
       documentId,
       userId,
       dateFilter,
@@ -1127,11 +1142,20 @@ router.post(
 
       teamId = user.teamId;
 
+      let collectionIds: string[] | undefined = undefined;
       if (collectionId) {
         const collection = await Collection.findByPk(collectionId, {
           userId: user.id,
         });
         authorize(user, "readDocument", collection);
+
+        if (includeChildCollections) {
+          const childCollectionIds =
+            await collection.findAllChildCollectionIds();
+          collectionIds = [collectionId, ...childCollectionIds];
+        } else {
+          collectionIds = [collectionId];
+        }
       }
 
       let documentIds = undefined;
@@ -1155,7 +1179,7 @@ router.post(
       response = await SearchHelper.searchForUser(user, {
         query,
         collaboratorIds,
-        collectionId,
+        collectionIds,
         documentIds,
         dateFilter,
         statusFilter,

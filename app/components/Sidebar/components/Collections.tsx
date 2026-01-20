@@ -26,7 +26,8 @@ function Collections() {
   const { documents, auth, collections } = useStores();
   const { t } = useTranslation();
   const can = usePolicy(auth.team?.id);
-  const orderedCollections = collections.allActive;
+  // Only show root-level collections (collections without parents)
+  const orderedCollections = collections.rootCollections;
 
   const params = useMemo(
     () => ({
@@ -43,10 +44,12 @@ function Collections() {
     drop: async (item: DragObject) => {
       void collections.move(
         item.id,
-        fractionalIndex(null, orderedCollections[0].index)
+        fractionalIndex(null, orderedCollections[0]?.index ?? null),
+        null // Move to root level
       );
     },
-    canDrop: (item) => item.id !== orderedCollections[0].id,
+    canDrop: (item) =>
+      orderedCollections.length === 0 || item.id !== orderedCollections[0].id,
     collect: (monitor) => ({
       isCollectionDropping: monitor.isOver(),
       isDraggingAnyCollection: monitor.getItemType() === "collection",
@@ -93,6 +96,7 @@ function Collections() {
                   collection={item}
                   activeDocument={documents.active}
                   belowCollection={orderedCollections[index + 1]}
+                  depth={0}
                 />
               )}
             />

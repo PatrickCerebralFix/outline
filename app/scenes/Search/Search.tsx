@@ -11,6 +11,7 @@ import { Pagination } from "@shared/constants";
 import type { DateFilter as TDateFilter } from "@shared/types";
 import { StatusFilter as TStatusFilter } from "@shared/types";
 import ArrowKeyNavigation from "~/components/ArrowKeyNavigation";
+import CollectionListItem from "~/components/CollectionListItem";
 import DocumentListItem from "~/components/DocumentListItem";
 import Fade from "~/components/Fade";
 import Flex from "~/components/Flex";
@@ -20,6 +21,7 @@ import Scene from "~/components/Scene";
 import Switch from "~/components/Switch";
 import Text from "~/components/Text";
 import env from "~/env";
+import type Collection from "~/models/Collection";
 import usePaginatedRequest from "~/hooks/usePaginatedRequest";
 import useQuery from "~/hooks/useQuery";
 import useStores from "~/hooks/useStores";
@@ -37,7 +39,7 @@ import { HStack } from "~/components/primitives/HStack";
 
 function Search() {
   const { t } = useTranslation();
-  const { documents, searches } = useStores();
+  const { documents, searches, collections } = useStores();
 
   // routing
   const params = useQuery();
@@ -63,6 +65,8 @@ function Search() {
     ? (params.getAll("statusFilter") as TStatusFilter[])
     : [TStatusFilter.Published, TStatusFilter.Draft];
   const titleFilter = params.get("titleFilter") === "true";
+  const includeChildCollections =
+    params.get("includeChildCollections") !== "false";
 
   const isSearchable = !!(query || collectionId || userId);
 
@@ -75,6 +79,7 @@ function Search() {
     documentType: isSearchable,
     date: isSearchable,
     title: !!query && !document,
+    includeChildCollections: !!collectionId && !document,
   };
 
   const filters = React.useMemo(
@@ -86,6 +91,7 @@ function Search() {
       dateFilter,
       titleFilter,
       documentId,
+      includeChildCollections,
     }),
     [
       query,
@@ -95,6 +101,7 @@ function Search() {
       dateFilter,
       titleFilter,
       documentId,
+      includeChildCollections,
     ]
   );
 
@@ -123,6 +130,39 @@ function Search() {
     limit: Pagination.defaultLimit,
   });
 
+  // Collection search
+  const [collectionResults, setCollectionResults] = React.useState<
+    Collection[]
+  >([]);
+  const [collectionLoading, setCollectionLoading] = React.useState(false);
+
+  React.useEffect(() => {
+    const searchCollections = async () => {
+      // Only search collections when there's a text query and no document filter
+      if (!query || documentId) {
+        setCollectionResults([]);
+        return;
+      }
+
+      setCollectionLoading(true);
+      try {
+        const results = await collections.search(query, {
+          limit: 5,
+          collectionId: collectionId || undefined,
+          includeNested: includeChildCollections,
+        });
+        setCollectionResults(results);
+      } catch (error) {
+        console.error("Collection search failed:", error);
+        setCollectionResults([]);
+      } finally {
+        setCollectionLoading(false);
+      }
+    };
+
+    void searchCollections();
+  }, [query, documentId, collectionId, includeChildCollections, collections]);
+
   const updateLocation = (query: string) => {
     // If query came from route params, navigate to base search path
     const pathname = routeMatch.params.query ? searchPath() : location.pathname;
@@ -147,6 +187,7 @@ function Search() {
     dateFilter?: TDateFilter;
     statusFilter?: TStatusFilter[];
     titleFilter?: boolean | undefined;
+    includeChildCollections?: boolean | undefined;
   }) => {
     history.replace({
       pathname: location.pathname,
@@ -203,12 +244,17 @@ function Search() {
   };
 
   const handleEscape = () => searchInputRef.current?.focus();
-  const showEmpty = !loading && query && data?.length === 0;
+  const showEmpty =
+    !loading &&
+    !collectionLoading &&
+    query &&
+    data?.length === 0 &&
+    collectionResults.length === 0;
 
   return (
     <Scene textTitle={query ? `${query} – ${t("Search")}` : t("Search")}>
       <RegisterKeyDown trigger="Escape" handler={history.goBack} />
-      {loading && <LoadingIndicator />}
+      {(loading || collectionLoading) && <LoadingIndicator />}
       <ResultsWrapper column auto>
         <form
           method="GET"
@@ -278,6 +324,17 @@ function Search() {
                 checked={titleFilter}
               />
             )}
+            {filterVisibility.includeChildCollections && (
+              <IncludeChildCollectionsFilter
+                width={26}
+                height={14}
+                label={t("Include nested")}
+                onChange={(checked: boolean) => {
+                  handleFilterChange({ includeChildCollections: checked });
+                }}
+                checked={includeChildCollections}
+              />
+            )}
           </Filters>
         </form>
         {isSearchable ? (
@@ -298,12 +355,31 @@ function Search() {
               <Fade>
                 <Centered column>
                   <Text as="p" type="secondary">
-                    {t("No documents found for your search filters.")}
+                    {t("No results found for your search filters.")}
                   </Text>
                 </Centered>
               </Fade>
             ) : null}
             <ResultList column>
+              {collectionResults.length > 0 && (
+                <CollectionResultsSection>
+                  <SectionHeader type="secondary" weight="bold" size="small">
+                    {t("Collections")}
+                  </SectionHeader>
+                  {collectionResults.map((collection) => (
+                    <CollectionListItem
+                      key={collection.id}
+                      collection={collection}
+                      highlight={query}
+                    />
+                  ))}
+                </CollectionResultsSection>
+              )}
+              {(data?.length || 0) > 0 && collectionResults.length > 0 && (
+                <SectionHeader type="secondary" weight="bold" size="small">
+                  {t("Documents")}
+                </SectionHeader>
+              )}
               <StyledArrowKeyNavigation
                 ref={resultListRef}
                 onEscape={handleEscape}
@@ -380,6 +456,22 @@ const SearchTitlesFilter = styled(Switch)`
   margin-top: 4px;
   font-size: 14px;
   font-weight: 400;
+`;
+
+const IncludeChildCollectionsFilter = styled(Switch)`
+  white-space: nowrap;
+  font-size: 14px;
+  font-weight: 400;
+`;
+
+const CollectionResultsSection = styled.div`
+  margin-bottom: 24px;
+`;
+
+const SectionHeader = styled(Text)`
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 8px;
 `;
 
 export default observer(Search);

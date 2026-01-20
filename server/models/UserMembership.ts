@@ -168,6 +168,42 @@ class UserMembership extends IdModel<
   }
 
   /**
+   * Copy user memberships from one collection to another (for permission inheritance).
+   *
+   * @param where The where clause to find the user memberships to copy.
+   * @param collection The collection to copy the user memberships to.
+   * @param options Additional options to pass to the query.
+   */
+  public static async copyToCollection(
+    where: WhereOptions<UserMembership>,
+    collection: Collection,
+    options: SaveOptions
+  ) {
+    const { transaction } = options;
+    const userMemberships = await this.findAll({
+      where: {
+        ...where,
+        sourceId: null, // Only copy explicit memberships, not inherited ones
+      },
+      transaction,
+    });
+    await Promise.all(
+      userMemberships.map((membership) =>
+        this.create(
+          {
+            collectionId: collection.id,
+            userId: membership.userId,
+            sourceId: membership.id,
+            permission: membership.permission,
+            createdById: membership.createdById,
+          },
+          { transaction, hooks: false }
+        )
+      )
+    );
+  }
+
+  /**
    * Find the root membership for a document and (optionally) user.
    *
    * @param documentId The document ID to find the membership for.
@@ -213,6 +249,18 @@ class UserMembership extends IdModel<
   }
 
   @AfterCreate
+  static async createSourcedMembershipsForCollection(
+    model: UserMembership,
+    options: SaveOptions<UserMembership>
+  ) {
+    if (model.sourceId || !model.collectionId) {
+      return;
+    }
+
+    return this.recreateSourcedMembershipsForCollection(model, options);
+  }
+
+  @AfterCreate
   static async publishAddUserEventAfterCreate(
     model: UserMembership,
     context: APIContext["context"]
@@ -228,6 +276,33 @@ class UserMembership extends IdModel<
     options: SaveOptions<UserMembership>
   ) {
     if (model.sourceId || !model.documentId) {
+      return;
+    }
+
+    const { transaction } = options;
+
+    if (model.changed("permission")) {
+      await this.update(
+        {
+          permission: model.permission,
+        },
+        {
+          where: {
+            userId: model.userId,
+            sourceId: model.id,
+          },
+          transaction,
+        }
+      );
+    }
+  }
+
+  @AfterUpdate
+  static async updateSourcedMembershipsForCollection(
+    model: UserMembership,
+    options: SaveOptions<UserMembership>
+  ) {
+    if (model.sourceId || !model.collectionId) {
       return;
     }
 
@@ -357,6 +432,71 @@ class UserMembership extends IdModel<
           hooks: false,
         }
       );
+    }
+  }
+
+  /**
+   * Recreate all sourced permissions for a collection membership.
+   * This propagates permissions to all child collections that don't have explicit overrides.
+   */
+  static async recreateSourcedMembershipsForCollection(
+    model: UserMembership,
+    options: SaveOptions<UserMembership>
+  ) {
+    if (!model.collectionId) {
+      return;
+    }
+    const { transaction } = options;
+
+    // Remove existing inherited memberships from this source
+    await this.destroy({
+      where: {
+        userId: model.userId,
+        sourceId: model.id,
+      },
+      transaction,
+    });
+
+    const collection = await Collection.findByPk(model.collectionId, {
+      transaction,
+    });
+    if (!collection) {
+      return;
+    }
+
+    const childCollectionIds = await collection.findAllChildCollectionIds({
+      transaction,
+    });
+
+    for (const childCollectionId of childCollectionIds) {
+      // Check if the child collection has an explicit membership for this user
+      const existingMembership = await this.findOne({
+        where: {
+          collectionId: childCollectionId,
+          userId: model.userId,
+          sourceId: null, // Explicit membership, not inherited
+        },
+        transaction,
+      });
+
+      // Only create inherited membership if no explicit override exists
+      if (!existingMembership) {
+        await this.create(
+          {
+            collectionId: childCollectionId,
+            userId: model.userId,
+            permission: model.permission,
+            sourceId: model.id,
+            createdById: model.createdById,
+            createdAt: model.createdAt,
+            updatedAt: model.updatedAt,
+          },
+          {
+            transaction,
+            hooks: false,
+          }
+        );
+      }
     }
   }
 

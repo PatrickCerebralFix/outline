@@ -55,6 +55,11 @@ export default class Collection extends ParanoidModel {
   @observable
   sharing: boolean;
 
+  /** The ID of the parent collection, if this collection is nested. */
+  @Field
+  @observable
+  parentCollectionId?: string | null;
+
   /** The sort index for the collection. */
   @Field
   @observable
@@ -126,6 +131,34 @@ export default class Collection extends ParanoidModel {
    */
   get isPrivate(): boolean {
     return !this.permission;
+  }
+
+  /** Returns the parent collection if this is a nested collection. */
+  @computed
+  get parentCollection(): Collection | undefined {
+    return this.parentCollectionId
+      ? this.store.get(this.parentCollectionId)
+      : undefined;
+  }
+
+  /** Returns whether this collection has a parent (is nested). */
+  @computed
+  get isNested(): boolean {
+    return !!this.parentCollectionId;
+  }
+
+  /** Returns child collections nested within this collection. */
+  @computed
+  get childCollections(): Collection[] {
+    return this.store.orderedData.filter(
+      (c) => c.parentCollectionId === this.id && c.isActive
+    );
+  }
+
+  /** Returns whether this collection has child collections. */
+  @computed
+  get hasChildCollections(): boolean {
+    return this.childCollections.length > 0;
   }
 
   /** Returns whether the collection description is not empty. */

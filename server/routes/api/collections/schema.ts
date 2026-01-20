@@ -18,6 +18,8 @@ const BaseIdSchema = z.object({
 export const CollectionsCreateSchema = BaseSchema.extend({
   body: z.object({
     name: z.string(),
+    /** ID of the parent collection to nest this collection under */
+    parentCollectionId: z.string().uuid().nullish(),
     color: z
       .string()
       .regex(ValidateColor.regex, { message: ValidateColor.message })
@@ -189,10 +191,28 @@ export const CollectionsListSchema = BaseSchema.extend({
 
     /** Collection statuses to include in results */
     statusFilter: z.nativeEnum(CollectionStatusFilter).array().optional(),
+
+    /** Filter by parent collection ID. Pass null to get only root-level collections. */
+    parentCollectionId: z.string().uuid().nullish(),
   }),
 });
 
 export type CollectionsListReq = z.infer<typeof CollectionsListSchema>;
+
+export const CollectionsSearchSchema = BaseSchema.extend({
+  body: z.object({
+    /** Search query to match against collection names */
+    query: z.string().min(1).max(100),
+    /** Maximum number of results to return */
+    limit: z.number().int().min(1).max(100).default(25),
+    /** Filter results to only include children of this collection */
+    collectionId: z.string().uuid().optional(),
+    /** When true, include all nested collections. When false, only direct children. */
+    includeNested: z.boolean().default(true),
+  }),
+});
+
+export type CollectionsSearchReq = z.infer<typeof CollectionsSearchSchema>;
 
 export const CollectionsDeleteSchema = BaseSchema.extend({
   body: BaseIdSchema,
@@ -224,6 +244,8 @@ export const CollectionsMoveSchema = BaseSchema.extend({
       .max(ValidateIndex.maxLength, {
         message: `Must be ${ValidateIndex.maxLength} or fewer characters long`,
       }),
+    /** New parent collection ID. Pass null to move to root level. */
+    parentCollectionId: z.string().uuid().nullish(),
   }),
 });
 

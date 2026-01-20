@@ -37,6 +37,7 @@ export type SearchParams = {
   dateFilter?: DateFilter;
   statusFilter?: StatusFilter[];
   collectionId?: string;
+  includeChildCollections?: boolean;
   userId?: string;
   shareId?: string;
 };
@@ -417,7 +418,10 @@ export default class DocumentsStore extends Store<Document> {
 
   @action
   searchTitles = async (options?: SearchParams): Promise<SearchResult[]> => {
-    const compactedOptions = omitBy(options, (o) => !o);
+    const compactedOptions = omitBy(
+      options,
+      (o) => o === undefined || o === null || o === ""
+    );
     const res = await client.post("/documents.search_titles", {
       ...compactedOptions,
     });
@@ -448,7 +452,10 @@ export default class DocumentsStore extends Store<Document> {
 
   @action
   search = async (options: SearchParams): Promise<SearchResult[]> => {
-    const compactedOptions = omitBy(options, (o) => !o);
+    const compactedOptions = omitBy(
+      options,
+      (o) => o === undefined || o === null || o === ""
+    );
     const res = await client.post("/documents.search", {
       ...compactedOptions,
     });

@@ -31,6 +31,8 @@ type Props = {
   prefetchDocument?: (documentId: string) => Promise<Document | void>;
   /** Element to display above the child documents */
   children?: React.ReactNode;
+  /** The nesting depth for document links within this collection. */
+  depth?: number;
 };
 
 function CollectionLinkChildren({
@@ -38,6 +40,7 @@ function CollectionLinkChildren({
   expanded,
   prefetchDocument,
   children,
+  depth = 1,
 }: Props) {
   const pageSize = DEFAULT_PAGE_SIZE;
   const { documents } = useStores();
@@ -75,7 +78,7 @@ function CollectionLinkChildren({
             activeDocument={documents.active}
             prefetchDocument={prefetchDocument}
             isDraft={node.isDraft}
-            depth={2}
+            depth={depth + 1}
             index={index}
           />
         ))}
@@ -87,7 +90,7 @@ function CollectionLinkChildren({
               </Text>
             }
             onClick={() => history.push(collection.url)}
-            depth={2}
+            depth={depth + 1}
           />
         )}
         {childDocuments && (

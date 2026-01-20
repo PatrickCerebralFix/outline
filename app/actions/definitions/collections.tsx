@@ -571,6 +571,31 @@ export const createDocument = createInternalLinkAction({
   },
 });
 
+export const createSubCollection = createAction({
+  name: ({ t }) => t("New sub-collection"),
+  analyticsName: "New sub-collection",
+  section: ActiveCollectionSection,
+  icon: <CollectionIcon />,
+  keywords: "create child nested sub",
+  visible: ({ activeCollectionId, stores }) =>
+    !!activeCollectionId &&
+    stores.policies.abilities(activeCollectionId).createChildCollection,
+  perform: ({ t, activeCollectionId, stores }) => {
+    if (!activeCollectionId) {
+      return;
+    }
+    stores.dialogs.openModal({
+      title: t("New sub-collection"),
+      content: (
+        <CollectionNew
+          parentCollectionId={activeCollectionId}
+          onSubmit={stores.dialogs.closeAllModals}
+        />
+      ),
+    });
+  },
+});
+
 export const createTemplate = createInternalLinkAction({
   name: ({ t }) => t("New template"),
   analyticsName: "New template",

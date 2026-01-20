@@ -1,13 +1,16 @@
 import type { Location } from "history";
 import { observer } from "mobx-react";
-import { PlusIcon } from "outline-icons";
+import { PlusIcon, CollectionIcon as CollectionIconOutline } from "outline-icons";
 import * as React from "react";
 import { useTranslation } from "react-i18next";
 import { mergeRefs } from "react-merge-refs";
 import { useHistory } from "react-router-dom";
+import styled from "styled-components";
+import { s } from "@shared/styles";
 import { UserPreference } from "@shared/types";
 import { ProsemirrorHelper } from "@shared/utils/ProsemirrorHelper";
 import { CollectionValidation, DocumentValidation } from "@shared/validations";
+import { CollectionNew } from "~/components/Collection/CollectionNew";
 import type Collection from "~/models/Collection";
 import type Document from "~/models/Document";
 import type { RefHandle } from "~/components/EditableTitle";
@@ -21,7 +24,10 @@ import usePolicy from "~/hooks/usePolicy";
 import useStores from "~/hooks/useStores";
 import CollectionMenu from "~/menus/CollectionMenu";
 import { documentEditPath } from "~/utils/routeHelpers";
-import { useDropToChangeCollection } from "../hooks/useDragAndDrop";
+import {
+  useDropToChangeCollection,
+  useDropToNestCollection,
+} from "../hooks/useDragAndDrop";
 import DropToImport from "./DropToImport";
 import Relative from "./Relative";
 import type { SidebarContextType } from "./SidebarContext";
@@ -30,6 +36,7 @@ import SidebarLink from "./SidebarLink";
 import { useCollectionMenuAction } from "~/hooks/useCollectionMenuAction";
 import { ActionContextProvider } from "~/hooks/useActionContext";
 import CollectionLinkChildren from "./CollectionLinkChildren";
+import DraggableCollectionLink from "./DraggableCollectionLink";
 
 type Props = {
   collection: Collection;
@@ -51,7 +58,7 @@ const CollectionLink: React.FC<Props> = ({
 }: Props) => {
   const [menuOpen, handleMenuOpen, handleMenuClose] = useBoolean();
   const [isEditing, setIsEditing] = React.useState(false);
-  const { documents } = useStores();
+  const { documents, dialogs } = useStores();
   const history = useHistory();
   const can = usePolicy(collection);
   const { t } = useTranslation();
@@ -75,11 +82,13 @@ const CollectionLink: React.FC<Props> = ({
   }, [expanded, onDisclosureClick]);
 
   const parentRef = React.useRef<HTMLDivElement>(null);
-  const [{ isOver, canDrop }, dropRef] = useDropToChangeCollection(
+  const [{ isOver, canDrop }, dropDocumentRef] = useDropToChangeCollection(
     collection,
     handleExpand,
     parentRef
   );
+  const [{ isOverCollection, canDropCollection }, dropCollectionRef] =
+    useDropToNestCollection(collection, handleExpand, parentRef);
 
   const handlePrefetch = React.useCallback(() => {
     void collection.fetchDocuments();
@@ -120,13 +129,34 @@ const CollectionLink: React.FC<Props> = ({
     [user, sidebarContext, closeAddingNewChild, history, collection, documents]
   );
 
+  const handleNewSubCollection = React.useCallback(
+    (ev: React.MouseEvent) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      dialogs.openModal({
+        title: t("New sub-collection"),
+        content: (
+          <CollectionNew
+            parentCollectionId={collection.id}
+            onSubmit={dialogs.closeAllModals}
+          />
+        ),
+      });
+    },
+    [collection.id, dialogs, t]
+  );
+
   const contextMenuAction = useCollectionMenuAction({
     collectionId: collection.id,
   });
 
+  // Determine if any drop is active
+  const isActiveDrop =
+    (isOver && canDrop) || (isOverCollection && canDropCollection);
+
   return (
     <ActionContextProvider value={{ activeCollectionId: collection.id }}>
-      <Relative ref={mergeRefs([parentRef, dropRef])}>
+      <Relative ref={mergeRefs([parentRef, dropDocumentRef, dropCollectionRef])}>
         <DropToImport collectionId={collection.id}>
           <SidebarLink
             onClick={onClick}
@@ -134,15 +164,23 @@ const CollectionLink: React.FC<Props> = ({
               pathname: collection.path,
               state: { sidebarContext },
             }}
-            expanded={expanded}
-            onDisclosureClick={onDisclosureClick}
+            expanded={
+              collection.hasDocuments || collection.hasChildCollections
+                ? expanded
+                : undefined
+            }
+            onDisclosureClick={
+              collection.hasDocuments || collection.hasChildCollections
+                ? onDisclosureClick
+                : undefined
+            }
             onClickIntent={handlePrefetch}
             contextAction={contextMenuAction}
             icon={
               <CollectionIcon collection={collection} expanded={expanded} />
             }
             showActions={menuOpen}
-            isActiveDrop={isOver && canDrop}
+            isActiveDrop={isActiveDrop}
             isActive={(
               match,
               location: Location<{ sidebarContext?: SidebarContextType }>
@@ -163,6 +201,15 @@ const CollectionLink: React.FC<Props> = ({
               !isEditing &&
               !isDraggingAnyCollection && (
                 <Fade>
+                  {can.createChildCollection && (
+                    <NudeButton
+                      tooltip={{ content: t("New sub-collection"), delay: 500 }}
+                      aria-label={t("New sub-collection")}
+                      onClick={handleNewSubCollection}
+                    >
+                      <CollectionIconOutline />
+                    </NudeButton>
+                  )}
                   {can.createDocument && (
                     <NudeButton
                       tooltip={{ content: t("New doc"), delay: 500 }}
@@ -188,14 +235,34 @@ const CollectionLink: React.FC<Props> = ({
           />
         </DropToImport>
       </Relative>
+      {/* Render child collections first, then documents */}
+      {expanded && collection.hasChildCollections && (
+        <ChildCollections>
+          {collection.childCollections.map((childCollection, index) => (
+            <DraggableCollectionLink
+              key={childCollection.id}
+              collection={childCollection}
+              activeDocument={documents.active}
+              belowCollection={collection.childCollections[index + 1]}
+              depth={(depth ?? 0) + 1}
+            />
+          ))}
+        </ChildCollections>
+      )}
       <CollectionLinkChildren
         collection={collection}
-        expanded={!!expanded}
+        expanded={
+          !!expanded &&
+          (collection.hasDocuments ||
+            collection.hasChildCollections ||
+            isAddingNewChild)
+        }
         prefetchDocument={documents.prefetchDocument}
+        depth={(depth ?? 0) + 1}
       >
         {isAddingNewChild ? (
           <SidebarLink
-            depth={2}
+            depth={(depth ?? 0) + 2}
             isActive={() => true}
             label={
               <EditableTitle
@@ -215,5 +282,12 @@ const CollectionLink: React.FC<Props> = ({
     </ActionContextProvider>
   );
 };
+
+const ChildCollections = styled.div`
+  background: ${s("sidebarHoverBackground")};
+  border-radius: 4px;
+  margin: 2px 0 2px 12px;
+  padding: 2px 0;
+`;
 
 export default observer(CollectionLink);

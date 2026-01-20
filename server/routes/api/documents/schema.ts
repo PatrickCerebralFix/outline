@@ -45,6 +45,9 @@ const BaseSearchSchema = DateFilterSchema.extend({
   /** Filter results for team based on the collection */
   collectionId: z.string().uuid().optional(),
 
+  /** Include documents from child collections when filtering by collectionId */
+  includeChildCollections: z.boolean().default(true),
+
   /** Filter results based on user */
   userId: z.string().uuid().optional(),
 

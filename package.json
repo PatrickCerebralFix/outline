@@ -392,5 +392,9 @@
     "cheerio": "1.0.0-rc.12"
   },
   "version": "1.2.0",
-  "packageManager": "yarn@4.11.0"
+  "packageManager": "yarn@4.11.0",
+  "volta": {
+    "node": "20.19.6",
+    "yarn": "4.12.0"
+  }
 }

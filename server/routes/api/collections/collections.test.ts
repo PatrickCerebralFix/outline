@@ -411,6 +411,231 @@ describe("#collections.move", () => {
     expect(movedCollectionC.data.index > "a").toBeTruthy();
     expect(movedCollectionC.data.index < "b").toBeTruthy();
   });
+
+  describe("permission recalculation", () => {
+    it("should recalculate permissions when moved to new parent", async () => {
+      const team = await buildTeam();
+      const admin = await buildAdmin({ teamId: team.id });
+      const user = await buildUser({ teamId: team.id });
+
+      // Create old parent with user access
+      const oldParent = await buildCollection({
+        teamId: team.id,
+        userId: admin.id,
+        permission: null,
+      });
+
+      const oldMembership = await UserMembership.create({
+        userId: user.id,
+        collectionId: oldParent.id,
+        permission: CollectionPermission.ReadWrite,
+        createdById: admin.id,
+      });
+
+      // Create new parent with Admin access for user
+      const newParent = await buildCollection({
+        teamId: team.id,
+        userId: admin.id,
+        permission: null,
+      });
+
+      await UserMembership.create({
+        userId: user.id,
+        collectionId: newParent.id,
+        permission: CollectionPermission.Admin,
+        createdById: admin.id,
+      });
+
+      // Create child under old parent with inherited permissions
+      const child = await buildCollection({
+        teamId: team.id,
+        userId: admin.id,
+        permission: null,
+        parentCollectionId: oldParent.id,
+      });
+
+      await UserMembership.create({
+        userId: user.id,
+        collectionId: child.id,
+        permission: CollectionPermission.ReadWrite,
+        createdById: admin.id,
+        sourceId: oldMembership.id,
+      });
+
+      // Move child to new parent
+      const res = await server.post("/api/collections.move", {
+        body: {
+          token: admin.getJwtToken(),
+          id: child.id,
+          parentCollectionId: newParent.id,
+        },
+      });
+      expect(res.status).toEqual(200);
+
+      // Verify permission was recalculated to Admin from new parent
+      const childMembership = await UserMembership.findOne({
+        where: {
+          userId: user.id,
+          collectionId: child.id,
+        },
+      });
+      expect(childMembership).toBeTruthy();
+      expect(childMembership!.permission).toEqual(CollectionPermission.Admin);
+    });
+
+    it("should remove inherited permissions when moved to root", async () => {
+      const team = await buildTeam();
+      const admin = await buildAdmin({ teamId: team.id });
+      const user = await buildUser({ teamId: team.id });
+
+      // Create parent with user access
+      const parent = await buildCollection({
+        teamId: team.id,
+        userId: admin.id,
+        permission: null,
+      });
+
+      const parentMembership = await UserMembership.create({
+        userId: user.id,
+        collectionId: parent.id,
+        permission: CollectionPermission.ReadWrite,
+        createdById: admin.id,
+      });
+
+      // Create child with inherited permission
+      const child = await buildCollection({
+        teamId: team.id,
+        userId: admin.id,
+        permission: null,
+        parentCollectionId: parent.id,
+      });
+
+      await UserMembership.create({
+        userId: user.id,
+        collectionId: child.id,
+        permission: CollectionPermission.ReadWrite,
+        createdById: admin.id,
+        sourceId: parentMembership.id,
+      });
+
+      // Move child to root
+      const res = await server.post("/api/collections.move", {
+        body: {
+          token: admin.getJwtToken(),
+          id: child.id,
+          parentCollectionId: null,
+        },
+      });
+      expect(res.status).toEqual(200);
+
+      // Verify inherited permission was removed
+      const childMembership = await UserMembership.findOne({
+        where: {
+          userId: user.id,
+          collectionId: child.id,
+        },
+      });
+      expect(childMembership).toBeNull();
+    });
+
+    it("should prevent moving collection to its own descendant", async () => {
+      const team = await buildTeam();
+      const admin = await buildAdmin({ teamId: team.id });
+
+      // Create parent -> child hierarchy
+      const parent = await buildCollection({
+        teamId: team.id,
+        userId: admin.id,
+      });
+
+      const child = await buildCollection({
+        teamId: team.id,
+        userId: admin.id,
+        parentCollectionId: parent.id,
+      });
+
+      // Try to move parent under child (circular reference)
+      const res = await server.post("/api/collections.move", {
+        body: {
+          token: admin.getJwtToken(),
+          id: parent.id,
+          parentCollectionId: child.id,
+        },
+      });
+      expect(res.status).toEqual(400);
+    });
+
+    it("should preserve explicit overrides when moving", async () => {
+      const team = await buildTeam();
+      const admin = await buildAdmin({ teamId: team.id });
+      const user = await buildUser({ teamId: team.id });
+
+      // Create old parent with Admin permission
+      const oldParent = await buildCollection({
+        teamId: team.id,
+        userId: admin.id,
+        permission: null,
+      });
+
+      await UserMembership.create({
+        userId: user.id,
+        collectionId: oldParent.id,
+        permission: CollectionPermission.Admin,
+        createdById: admin.id,
+      });
+
+      // Create new parent with different permission
+      const newParent = await buildCollection({
+        teamId: team.id,
+        userId: admin.id,
+        permission: null,
+      });
+
+      await UserMembership.create({
+        userId: user.id,
+        collectionId: newParent.id,
+        permission: CollectionPermission.ReadWrite,
+        createdById: admin.id,
+      });
+
+      // Create child with explicit Read override (not inherited)
+      const child = await buildCollection({
+        teamId: team.id,
+        userId: admin.id,
+        permission: null,
+        parentCollectionId: oldParent.id,
+      });
+
+      await UserMembership.create({
+        userId: user.id,
+        collectionId: child.id,
+        permission: CollectionPermission.Read,
+        createdById: admin.id,
+        sourceId: null, // explicit override
+      });
+
+      // Move child to new parent
+      const res = await server.post("/api/collections.move", {
+        body: {
+          token: admin.getJwtToken(),
+          id: child.id,
+          parentCollectionId: newParent.id,
+        },
+      });
+      expect(res.status).toEqual(200);
+
+      // Verify explicit override was preserved
+      const childMembership = await UserMembership.findOne({
+        where: {
+          userId: user.id,
+          collectionId: child.id,
+        },
+      });
+      expect(childMembership).toBeTruthy();
+      expect(childMembership!.permission).toEqual(CollectionPermission.Read);
+      expect(childMembership!.sourceId).toBeNull(); // still explicit
+    });
+  });
 });
 
 describe("#collections.export", () => {
@@ -1473,6 +1698,127 @@ describe("#collections.create", () => {
     expect(createdCollection.data.index).toEqual("aP");
     expect(createdCollection.data.index > "a").toBeTruthy();
     expect(createdCollection.data.index < "b").toBeTruthy();
+  });
+
+  describe("with parentCollectionId", () => {
+    it("should inherit user permissions from parent collection", async () => {
+      const team = await buildTeam();
+      const admin = await buildAdmin({ teamId: team.id });
+      const user = await buildUser({ teamId: team.id });
+
+      // Create private parent collection
+      const parent = await buildCollection({
+        teamId: team.id,
+        userId: admin.id,
+        permission: null,
+      });
+
+      // Give user access to parent
+      await UserMembership.create({
+        userId: user.id,
+        collectionId: parent.id,
+        permission: CollectionPermission.ReadWrite,
+        createdById: admin.id,
+      });
+
+      // Create child collection via API
+      const res = await server.post("/api/collections.create", {
+        body: {
+          token: admin.getJwtToken(),
+          name: "Child Collection",
+          parentCollectionId: parent.id,
+          permission: null,
+        },
+      });
+      const body = await res.json();
+      expect(res.status).toEqual(200);
+      expect(body.data.parentCollectionId).toEqual(parent.id);
+
+      // Verify user has inherited access to child
+      const childMembership = await UserMembership.findOne({
+        where: {
+          userId: user.id,
+          collectionId: body.data.id,
+        },
+      });
+      expect(childMembership).toBeTruthy();
+      expect(childMembership!.permission).toEqual(CollectionPermission.ReadWrite);
+      expect(childMembership!.sourceId).toBeTruthy(); // inherited
+    });
+
+    it("should inherit group permissions from parent collection", async () => {
+      const team = await buildTeam();
+      const admin = await buildAdmin({ teamId: team.id });
+      const group = await buildGroup({ teamId: team.id });
+
+      // Create private parent with group access
+      const parent = await buildCollection({
+        teamId: team.id,
+        userId: admin.id,
+        permission: null,
+      });
+
+      await GroupMembership.create({
+        groupId: group.id,
+        collectionId: parent.id,
+        permission: CollectionPermission.Admin,
+        createdById: admin.id,
+      });
+
+      // Create child collection
+      const res = await server.post("/api/collections.create", {
+        body: {
+          token: admin.getJwtToken(),
+          name: "Child Collection",
+          parentCollectionId: parent.id,
+          permission: null,
+        },
+      });
+      const body = await res.json();
+      expect(res.status).toEqual(200);
+
+      // Verify group has inherited access
+      const childMembership = await GroupMembership.findOne({
+        where: {
+          groupId: group.id,
+          collectionId: body.data.id,
+        },
+      });
+      expect(childMembership).toBeTruthy();
+      expect(childMembership!.permission).toEqual(CollectionPermission.Admin);
+      expect(childMembership!.sourceId).toBeTruthy();
+    });
+
+    it("should require createChildCollection permission on parent", async () => {
+      const team = await buildTeam();
+      const admin = await buildAdmin({ teamId: team.id });
+      const user = await buildUser({ teamId: team.id });
+
+      // Create private parent collection
+      const parent = await buildCollection({
+        teamId: team.id,
+        userId: admin.id,
+        permission: null,
+      });
+
+      // Give user only ReadWrite (not Admin) permission
+      await UserMembership.create({
+        userId: user.id,
+        collectionId: parent.id,
+        permission: CollectionPermission.ReadWrite,
+        createdById: admin.id,
+      });
+
+      // User should not be able to create child collection
+      const res = await server.post("/api/collections.create", {
+        body: {
+          token: user.getJwtToken(),
+          name: "Child Collection",
+          parentCollectionId: parent.id,
+        },
+      });
+      expect(res.status).toEqual(403);
+    });
   });
 });
 

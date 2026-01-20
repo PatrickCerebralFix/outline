@@ -31,6 +31,21 @@ allow(User, "move", Collection, (actor, collection) =>
   )
 );
 
+allow(User, "createChildCollection", Collection, (actor, collection) =>
+  and(
+    !!collection,
+    !!collection?.isActive,
+    !actor.isGuest,
+    !actor.isViewer,
+    isTeamModel(actor, collection),
+    isTeamMutable(actor),
+    or(
+      isTeamAdmin(actor, collection),
+      includesMembership(collection, [CollectionPermission.Admin])
+    )
+  )
+);
+
 allow(User, "read", Collection, (user, collection) => {
   if (!collection || user.teamId !== collection.teamId) {
     return false;

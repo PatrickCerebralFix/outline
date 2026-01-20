@@ -20,12 +20,15 @@ type Props = {
   collection: Collection;
   activeDocument: Document | undefined;
   belowCollection: Collection | void;
+  /** The nesting depth of this collection in the hierarchy. */
+  depth?: number;
 };
 
 function DraggableCollectionLink({
   collection,
   activeDocument,
   belowCollection,
+  depth = 0,
 }: Props) {
   const locationSidebarContext = useLocationSidebarContext();
   const sidebarContext = useSidebarContext();
@@ -36,16 +39,18 @@ function DraggableCollectionLink({
   );
   const belowCollectionIndex = belowCollection ? belowCollection.index : null;
 
-  // Drop to reorder collection
+  // Drop to reorder collection (places item after this collection at the same level)
   const [
     { isCollectionDropping, isDraggingAnyCollection },
     dropToReorderCollection,
   ] = useDrop({
     accept: "collection",
     drop: (item: DragObject) => {
+      // Move to the same parent as this collection, positioned after it
       void collections.move(
         item.id,
-        fractionalIndex(collection.index, belowCollectionIndex)
+        fractionalIndex(collection.index, belowCollectionIndex),
+        collection.parentCollectionId
       );
     },
     canDrop: (item) =>
@@ -111,6 +116,7 @@ function DraggableCollectionLink({
           activeDocument={activeDocument}
           onDisclosureClick={handleDisclosureClick}
           isDraggingAnyCollection={isDraggingAnyCollection}
+          depth={depth}
         />
       </Draggable>
       <Relative>
