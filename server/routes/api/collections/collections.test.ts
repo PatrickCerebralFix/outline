@@ -468,6 +468,7 @@ describe("#collections.move", () => {
           token: admin.getJwtToken(),
           id: child.id,
           parentCollectionId: newParent.id,
+          index: "a",
         },
       });
       expect(res.status).toEqual(200);
@@ -524,6 +525,7 @@ describe("#collections.move", () => {
           token: admin.getJwtToken(),
           id: child.id,
           parentCollectionId: null,
+          index: "a",
         },
       });
       expect(res.status).toEqual(200);
@@ -620,6 +622,7 @@ describe("#collections.move", () => {
           token: admin.getJwtToken(),
           id: child.id,
           parentCollectionId: newParent.id,
+          index: "a",
         },
       });
       expect(res.status).toEqual(200);

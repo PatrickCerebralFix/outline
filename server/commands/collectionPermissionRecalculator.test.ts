@@ -1,5 +1,5 @@
 import { CollectionPermission } from "@shared/types";
-import { Collection, UserMembership, GroupMembership } from "@server/models";
+import { UserMembership, GroupMembership } from "@server/models";
 import {
   buildUser,
   buildAdmin,

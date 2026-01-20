@@ -35,7 +35,7 @@ const CollectionLink = styled(Link)`
   padding: 8px 12px;
   border-radius: 6px;
   cursor: var(--pointer);
-  background: ${s("secondaryBackground")};
+  background: ${s("sidebarBackground")};
   border: 1px solid transparent;
   transition: background 100ms ease-in-out, border-color 100ms ease-in-out;
 

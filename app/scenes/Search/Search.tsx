@@ -152,8 +152,7 @@ function Search() {
           includeNested: includeChildCollections,
         });
         setCollectionResults(results);
-      } catch (error) {
-        console.error("Collection search failed:", error);
+      } catch {
         setCollectionResults([]);
       } finally {
         setCollectionLoading(false);
