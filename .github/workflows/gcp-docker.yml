@@ -2,8 +2,8 @@ name: Build and Push to GCP
 
 on:
   push:
-    branches:
-      - release
+    tags:
+      - "v*"
 
 env:
   GCP_PROJECT: cerebralfix
@@ -45,6 +45,10 @@ jobs:
       - name: Configure Docker for GCP Artifact Registry
         run: gcloud auth configure-docker ${{ env.GAR_LOCATION }} --quiet
 
+      - name: Extract version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
       - name: Build and push base image
         uses: docker/build-push-action@v6
         with:
@@ -53,7 +57,7 @@ jobs:
           push: true
           tags: |
             ${{ env.GAR_LOCATION }}/${{ env.GAR_REPOSITORY }}/${{ env.IMAGE_NAME }}-base:latest
-            ${{ env.GAR_LOCATION }}/${{ env.GAR_REPOSITORY }}/${{ env.IMAGE_NAME }}-base:${{ github.sha }}
+            ${{ env.GAR_LOCATION }}/${{ env.GAR_REPOSITORY }}/${{ env.IMAGE_NAME }}-base:${{ steps.version.outputs.VERSION }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -65,8 +69,8 @@ jobs:
           push: true
           tags: |
             ${{ env.GAR_LOCATION }}/${{ env.GAR_REPOSITORY }}/${{ env.IMAGE_NAME }}:latest
-            ${{ env.GAR_LOCATION }}/${{ env.GAR_REPOSITORY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+            ${{ env.GAR_LOCATION }}/${{ env.GAR_REPOSITORY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.VERSION }}
           build-args: |
-            BASE_IMAGE=${{ env.GAR_LOCATION }}/${{ env.GAR_REPOSITORY }}/${{ env.IMAGE_NAME }}-base:${{ github.sha }}
+            BASE_IMAGE=${{ env.GAR_LOCATION }}/${{ env.GAR_REPOSITORY }}/${{ env.IMAGE_NAME }}-base:${{ steps.version.outputs.VERSION }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
