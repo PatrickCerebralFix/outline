@@ -23,14 +23,15 @@ function DocumentNew({ template }: Props) {
   const location = useLocation();
   const query = useQuery();
   const user = useCurrentUser();
-  const match = useRouteMatch<{ id?: string }>();
+  const match = useRouteMatch<{ collectionSlug?: string }>();
   const { t } = useTranslation();
   const { documents, collections, userMemberships, groupMemberships } =
     useStores();
-  const id = match.params.id || query.get("collectionId");
+  const id = match.params.collectionSlug || query.get("collectionId");
 
   useEffect(() => {
     async function createDocument() {
+      const index = parseInt(query.get("index") || "0", 10);
       const parentDocumentId = query.get("parentDocumentId") ?? undefined;
       const parentDocument = parentDocumentId
         ? documents.get(parentDocumentId)
@@ -41,6 +42,7 @@ function DocumentNew({ template }: Props) {
         if (id) {
           collection = await collections.fetch(id);
         }
+
         const document = await documents.create(
           {
             collectionId: collection?.id,
@@ -53,7 +55,10 @@ function DocumentNew({ template }: Props) {
             title: query.get("title") ?? "",
             data: ProsemirrorHelper.getEmptyDocument(),
           },
-          { publish: collection?.id || parentDocumentId ? true : undefined }
+          {
+            publish: collection?.id || parentDocumentId ? true : undefined,
+            index,
+          }
         );
 
         if (parentDocumentId) {
@@ -79,7 +84,8 @@ function DocumentNew({ template }: Props) {
     }
 
     void createDocument();
-  });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <Flex column auto>

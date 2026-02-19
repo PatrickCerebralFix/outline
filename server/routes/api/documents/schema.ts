@@ -1,7 +1,13 @@
 import type formidable from "formidable";
 import isEmpty from "lodash/isEmpty";
 import { z } from "zod";
-import { DocumentPermission, StatusFilter, TextEditMode } from "@shared/types";
+import {
+  DirectionFilter,
+  DocumentPermission,
+  StatusFilter,
+  TextEditMode,
+  SortFilter,
+} from "@shared/types";
 import { BaseSchema } from "@server/routes/api/schema";
 import { zodIconType, zodIdType, zodShareIdType } from "@server/utils/zod";
 import { ValidateColor } from "@server/validation";
@@ -179,6 +185,14 @@ export const DocumentsSearchSchema = BaseSchema.extend({
   body: BaseSearchSchema.extend({
     /** Query for search */
     query: z.string().optional(),
+
+    /** Specifies the attributes by which search results will be sorted */
+    sort: z.enum(Object.values(SortFilter) as [string, ...string[]]).optional(),
+
+    /** Specifies the sort order with respect to sort field */
+    direction: z
+      .enum(Object.values(DirectionFilter) as [string, ...string[]])
+      .optional(),
   }),
 });
 
@@ -188,6 +202,14 @@ export const DocumentsSearchTitlesSchema = BaseSchema.extend({
   body: BaseSearchSchema.extend({
     /** Query for search */
     query: z.string().refine((val) => val.trim() !== ""),
+
+    /** Specifies the attributes by which search results will be sorted */
+    sort: z.enum(Object.values(SortFilter) as [string, ...string[]]).optional(),
+
+    /** Specifies the sort order with respect to sort field */
+    direction: z
+      .enum(Object.values(DirectionFilter) as [string, ...string[]])
+      .optional(),
   }),
 });
 
@@ -339,13 +361,21 @@ export const DocumentsImportSchema = BaseSchema.extend({
   body: z
     .object({
       /** Whether to publish the imported docs. String as this is always multipart/form-data */
-      publish: z.preprocess((val) => val === "true", z.boolean()).optional(),
+      publish: z
+        .union([
+          z.boolean(),
+          z.preprocess((val) => val === "true", z.boolean()),
+        ])
+        .optional(),
 
       /** Import docs to this collection */
       collectionId: z.string().uuid().nullish(),
 
       /** Import under this parent doc */
       parentDocumentId: z.string().uuid().nullish(),
+
+      /** ID of a pre-uploaded attachment to import from */
+      attachmentId: z.string().uuid().optional(),
     })
     .refine(
       (req) => !(isEmpty(req.collectionId) && isEmpty(req.parentDocumentId)),
@@ -353,7 +383,9 @@ export const DocumentsImportSchema = BaseSchema.extend({
         message: "one of collectionId or parentDocumentId is required",
       }
     ),
-  file: z.custom<formidable.File>(),
+  file: z.custom<formidable.File>().optional(),
+}).refine((req) => req.body.attachmentId || req.file, {
+  message: "one of attachmentId or file is required",
 });
 
 export type DocumentsImportReq = z.infer<typeof DocumentsImportSchema>;
@@ -383,6 +415,9 @@ export const DocumentsCreateSchema = BaseSchema.extend({
 
     /** Collection to create document within  */
     collectionId: z.string().uuid().nullish(),
+
+    /** Index to create the document at within the collection */
+    index: z.number().optional(),
 
     /** Parent document to create within */
     parentDocumentId: z.string().uuid().nullish(),

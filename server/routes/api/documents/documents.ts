@@ -1,4 +1,4 @@
-import path from "path";
+import path from "node:path";
 import fractionalIndex from "fractional-index";
 import fs from "fs-extra";
 import invariant from "invariant";
@@ -12,8 +12,9 @@ import uniq from "lodash/uniq";
 import mime from "mime-types";
 import type { Order, ScopeOptions, WhereOptions } from "sequelize";
 import { Op, Sequelize } from "sequelize";
-import { randomUUID } from "crypto";
-import type { NavigationNode } from "@shared/types";
+import { randomUUID } from "node:crypto";
+import type { DirectionFilter, SortFilter } from "@shared/types";
+import { type NavigationNode } from "@shared/types";
 import {
   FileOperationFormat,
   FileOperationState,
@@ -81,7 +82,7 @@ import FileStorage from "@server/storage/files";
 import type { APIContext } from "@server/types";
 import { RateLimiterStrategy } from "@server/utils/RateLimiter";
 import ZipHelper from "@server/utils/ZipHelper";
-import { convertBareUrlsToEmbedMarkdown } from "@server/utils/embedHelper";
+import { convertBareUrlsToEmbedMarkdown } from "@server/utils/embeds";
 import { getTeamFromContext } from "@server/utils/passport";
 import { assertPresent } from "@server/validation";
 import pagination from "../middlewares/pagination";
@@ -1017,6 +1018,8 @@ router.post(
       collectionId,
       includeChildCollections,
       userId,
+      sort,
+      direction,
     } = ctx.input.body;
     const { offset, limit } = ctx.state.pagination;
     const { user } = ctx.state.auth;
@@ -1049,6 +1052,8 @@ router.post(
       collaboratorIds,
       offset,
       limit,
+      sort: sort as SortFilter,
+      direction: direction as DirectionFilter,
     });
     const policies = presentPolicies(user, documents);
     const data = await Promise.all(
@@ -1081,6 +1086,8 @@ router.post(
       shareId,
       snippetMinWords,
       snippetMaxWords,
+      sort,
+      direction,
     } = ctx.input.body;
     const { offset, limit } = ctx.state.pagination;
     const { user } = ctx.state.auth;
@@ -1134,6 +1141,8 @@ router.post(
         limit,
         snippetMinWords,
         snippetMaxWords,
+        sort: sort as SortFilter,
+        direction: direction as DirectionFilter,
       });
     } else {
       if (!user) {
@@ -1187,6 +1196,8 @@ router.post(
         limit,
         snippetMinWords,
         snippetMaxWords,
+        sort: sort as SortFilter,
+        direction: direction as DirectionFilter,
       });
     }
 
@@ -1584,11 +1595,14 @@ router.post(
   "documents.import",
   auth(),
   rateLimiter(RateLimiterStrategy.TwentyFivePerMinute),
+  multipart({
+    maximumFileSize: env.FILE_STORAGE_IMPORT_MAX_SIZE,
+    optional: true,
+  }),
   validate(T.DocumentsImportSchema),
-  multipart({ maximumFileSize: env.FILE_STORAGE_IMPORT_MAX_SIZE }),
   async (ctx: APIContext<T.DocumentsImportReq>) => {
-    const { collectionId, parentDocumentId, publish } = ctx.input.body;
-    const file = ctx.input.file;
+    const { collectionId, parentDocumentId, publish, attachmentId } =
+      ctx.input.body;
     const { user } = ctx.state.auth;
 
     if (collectionId) {
@@ -1607,24 +1621,37 @@ router.post(
       authorize(user, "createChildDocument", parentDocument);
     }
 
-    const buffer = await fs.readFile(file.filepath);
-    const fileName = file.originalFilename ?? file.newFilename;
-    const mimeType = file.mimetype ?? "";
-    const acl = "private";
+    let key: string;
+    let fileName: string;
+    let mimeType: string;
 
-    const key = AttachmentHelper.getKey({
-      id: randomUUID(),
-      name: fileName,
-      userId: user.id,
-    });
+    if (attachmentId) {
+      const attachment = await Attachment.findByPk(attachmentId);
+      authorize(user, "read", attachment);
 
-    await FileStorage.store({
-      body: buffer,
-      contentType: mimeType,
-      contentLength: buffer.length,
-      key,
-      acl,
-    });
+      key = attachment.key;
+      fileName = attachment.name;
+      mimeType = attachment.contentType;
+    } else {
+      const file = ctx.input.file!;
+      const buffer = await fs.readFile(file.filepath);
+      fileName = file.originalFilename ?? file.newFilename;
+      mimeType = file.mimetype ?? "";
+
+      key = AttachmentHelper.getKey({
+        id: randomUUID(),
+        name: fileName,
+        userId: user.id,
+      });
+
+      await FileStorage.store({
+        body: buffer,
+        contentType: mimeType,
+        contentLength: buffer.length,
+        key,
+        acl: "private",
+      });
+    }
 
     const job = await new DocumentImportTask().schedule({
       key,
@@ -1633,7 +1660,7 @@ router.post(
         mimeType,
       },
       userId: user.id,
-      collectionId: collectionId ?? parentDocument?.collectionId, // collectionId will be null when parent document is shared to the user.
+      collectionId: collectionId ?? parentDocument?.collectionId,
       parentDocumentId,
       publish,
       ip: ctx.request.ip,
@@ -1669,6 +1696,7 @@ router.post(
       icon,
       color,
       publish,
+      index,
       collectionId,
       parentDocumentId,
       fullWidth,
@@ -1736,6 +1764,7 @@ router.post(
       color,
       createdAt,
       publish,
+      index,
       collectionId: collection?.id,
       parentDocumentId,
       templateDocument,

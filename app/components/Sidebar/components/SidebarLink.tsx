@@ -53,6 +53,8 @@ type Props = Omit<NavLinkProps, "to"> & {
   isDraft?: boolean;
   /** Nesting depth level for indentation (0-based) */
   depth?: number;
+  /** Whether to truncate the label text (default: true, causes overflow: hidden) */
+  ellipsis?: boolean;
   /** Whether to automatically scroll this link into view if needed */
   scrollIntoViewIfNeeded?: boolean;
   /** Optional context menu action to display */
@@ -89,6 +91,7 @@ function SidebarLink(
     disabled,
     unreadBadge,
     contextAction,
+    ellipsis = true,
     ...rest
   }: Props,
   ref: React.RefObject<HTMLAnchorElement>
@@ -139,7 +142,7 @@ function SidebarLink(
       ev.stopPropagation();
       onDisclosureClick?.(ev);
     },
-    [onDisclosureClick]
+    [onDisclosureClick, hasDisclosure]
   );
 
   const DisclosureComponent = icon ? HiddenDisclosure : Disclosure;
@@ -176,7 +179,7 @@ function SidebarLink(
             />
           )}
           {icon && <IconWrapper>{icon}</IconWrapper>}
-          <Label $ellipsis={typeof label === "string"}>{label}</Label>
+          <Label $ellipsis={ellipsis}>{label}</Label>
           {unreadBadge && <UnreadBadge style={unreadStyle} />}
         </Content>
       </ContextMenu>
@@ -199,6 +202,7 @@ const Content = styled.span`
   align-items: start;
   position: relative;
   width: 100%;
+  min-width: 0;
 `;
 
 const Actions = styled(EventBoundary)<{ showActions?: boolean }>`
@@ -347,6 +351,7 @@ const Label = styled.div<{ $ellipsis: boolean }>`
   width: 100%;
   line-height: 24px;
   margin-left: 2px;
+  min-width: 0;
   ${(props) => props.$ellipsis && ellipsis()}
 
   * {

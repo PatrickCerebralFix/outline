@@ -8,7 +8,11 @@ import { Waypoint } from "react-waypoint";
 import styled from "styled-components";
 import breakpoint from "styled-components-breakpoint";
 import { Pagination } from "@shared/constants";
-import type { DateFilter as TDateFilter } from "@shared/types";
+import type {
+  SortFilter as TSortFilter,
+  DirectionFilter as TDirectionFilter,
+  DateFilter as TDateFilter,
+} from "@shared/types";
 import { StatusFilter as TStatusFilter } from "@shared/types";
 import ArrowKeyNavigation from "~/components/ArrowKeyNavigation";
 import CollectionListItem from "~/components/CollectionListItem";
@@ -34,6 +38,7 @@ import { DocumentFilter } from "./components/DocumentFilter";
 import DocumentTypeFilter from "./components/DocumentTypeFilter";
 import RecentSearches from "./components/RecentSearches";
 import SearchInput from "./components/SearchInput";
+import { SortInput } from "./components/SortInput";
 import UserFilter from "./components/UserFilter";
 import { HStack } from "~/components/primitives/HStack";
 
@@ -67,6 +72,8 @@ function Search() {
   const titleFilter = params.get("titleFilter") === "true";
   const includeChildCollections =
     params.get("includeChildCollections") !== "false";
+  const sort = (params.get("sort") as TSortFilter) ?? "";
+  const direction = (params.get("direction") as TDirectionFilter) ?? "";
 
   const isSearchable = !!(query || collectionId || userId);
 
@@ -80,6 +87,7 @@ function Search() {
     date: isSearchable,
     title: !!query && !document,
     includeChildCollections: !!collectionId && !document,
+    sort: isSearchable,
   };
 
   const filters = React.useMemo(
@@ -92,6 +100,8 @@ function Search() {
       titleFilter,
       documentId,
       includeChildCollections,
+      sort,
+      direction,
     }),
     [
       query,
@@ -102,6 +112,8 @@ function Search() {
       titleFilter,
       documentId,
       includeChildCollections,
+      sort,
+      direction,
     ]
   );
 
@@ -187,7 +199,14 @@ function Search() {
     statusFilter?: TStatusFilter[];
     titleFilter?: boolean | undefined;
     includeChildCollections?: boolean | undefined;
+    sort?: string | undefined;
+    direction?: string | undefined;
   }) => {
+    if (search.sort === "relevance") {
+      search.sort = undefined;
+      search.direction = undefined;
+    }
+
     history.replace({
       pathname: location.pathname,
       search: queryString.stringify(
@@ -276,62 +295,73 @@ function Search() {
           />
 
           <Filters>
-            {filterVisibility.document && (
-              <DocumentFilter
-                document={document!}
-                onClick={() => {
-                  handleFilterChange({ documentId: undefined });
-                }}
-              />
-            )}
-            {filterVisibility.collection && (
-              <CollectionFilter
-                collectionId={collectionId}
-                onSelect={(collectionId) =>
-                  handleFilterChange({ collectionId })
+            <Flex align="center" gap={4}>
+              {filterVisibility.document && (
+                <DocumentFilter
+                  document={document!}
+                  onClick={() => {
+                    handleFilterChange({ documentId: undefined });
+                  }}
+                />
+              )}
+              {filterVisibility.collection && (
+                <CollectionFilter
+                  collectionId={collectionId}
+                  onSelect={(collectionId) =>
+                    handleFilterChange({ collectionId })
+                  }
+                />
+              )}
+              {filterVisibility.user && (
+                <UserFilter
+                  userId={userId}
+                  onSelect={(userId) => handleFilterChange({ userId })}
+                />
+              )}
+              {filterVisibility.documentType && (
+                <DocumentTypeFilter
+                  statusFilter={statusFilter}
+                  onSelect={({ statusFilter }) =>
+                    handleFilterChange({ statusFilter })
+                  }
+                />
+              )}
+              {filterVisibility.date && (
+                <DateFilter
+                  dateFilter={dateFilter}
+                  onSelect={(dateFilter) => handleFilterChange({ dateFilter })}
+                />
+              )}
+              {filterVisibility.title && (
+                <SearchTitlesFilter
+                  width={26}
+                  height={14}
+                  label={t("Search titles only")}
+                  onChange={(checked: boolean) => {
+                    handleFilterChange({ titleFilter: checked });
+                  }}
+                  checked={titleFilter}
+                />
+              )}
+              {filterVisibility.includeChildCollections && (
+                <IncludeChildCollectionsFilter
+                  width={26}
+                  height={14}
+                  label={t("Include nested")}
+                  onChange={(checked: boolean) => {
+                    handleFilterChange({ includeChildCollections: checked });
+                  }}
+                  checked={includeChildCollections}
+                />
+              )}
+            </Flex>
+            {filterVisibility.sort && (
+              <SortInput
+                sort={sort}
+                direction={direction}
+                onSelect={(sort, direction) =>
+                  handleFilterChange({ sort, direction })
                 }
-              />
-            )}
-            {filterVisibility.user && (
-              <UserFilter
-                userId={userId}
-                onSelect={(userId) => handleFilterChange({ userId })}
-              />
-            )}
-            {filterVisibility.documentType && (
-              <DocumentTypeFilter
-                statusFilter={statusFilter}
-                onSelect={({ statusFilter }) =>
-                  handleFilterChange({ statusFilter })
-                }
-              />
-            )}
-            {filterVisibility.date && (
-              <DateFilter
-                dateFilter={dateFilter}
-                onSelect={(dateFilter) => handleFilterChange({ dateFilter })}
-              />
-            )}
-            {filterVisibility.title && (
-              <SearchTitlesFilter
-                width={26}
-                height={14}
-                label={t("Search titles only")}
-                onChange={(checked: boolean) => {
-                  handleFilterChange({ titleFilter: checked });
-                }}
-                checked={titleFilter}
-              />
-            )}
-            {filterVisibility.includeChildCollections && (
-              <IncludeChildCollectionsFilter
-                width={26}
-                height={14}
-                label={t("Include nested")}
-                onChange={(checked: boolean) => {
-                  handleFilterChange({ includeChildCollections: checked });
-                }}
-                checked={includeChildCollections}
               />
             )}
           </Filters>
@@ -440,6 +470,7 @@ const StyledArrowKeyNavigation = styled(ArrowKeyNavigation)`
 
 const Filters = styled(HStack)`
   flex-wrap: wrap;
+  justify-content: space-between;
   margin-bottom: 12px;
   transition: opacity 100ms ease-in-out;
   padding: 8px 0;
@@ -452,7 +483,7 @@ const Filters = styled(HStack)`
 const SearchTitlesFilter = styled(Switch)`
   white-space: nowrap;
   margin-left: 8px;
-  margin-top: 4px;
+  margin-top: 8px;
   font-size: 14px;
   font-weight: 400;
 `;

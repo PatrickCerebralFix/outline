@@ -199,7 +199,18 @@ class DocumentScene extends React.Component<Props> {
     const revisionId = location.state?.revisionId;
     const editorRef = this.editor.current;
 
-    if (!editorRef || !restore) {
+    if (!editorRef) {
+      return;
+    }
+
+    // Highlight search term when navigating from search results
+    const params = new URLSearchParams(location.search);
+    const searchTerm = params.get("q");
+    if (searchTerm) {
+      editorRef.commands.find({ text: searchTerm });
+    }
+
+    if (!restore) {
       return;
     }
 
@@ -658,6 +669,13 @@ const Main = styled.div<MainProps>`
           : `minmax(0, 1fr) ${EditorStyleHelper.tocWidth}px`
         : `1fr minmax(0, ${`calc(${EditorStyleHelper.documentWidth} + ${EditorStyleHelper.documentGutter})`}) 1fr`};
   `};
+
+  @media print {
+    display: block;
+    max-width: calc(
+      ${EditorStyleHelper.documentWidth} + ${EditorStyleHelper.documentGutter}
+    );
+  }
 `;
 
 type ContentsContainerProps = {
