@@ -15,6 +15,7 @@ export { default as UserMembership } from "./UserMembership";
 export { default as Comment } from "./Comment";
 
 export { default as Document } from "./Document";
+export { default as DocumentProperty } from "./DocumentProperty";
 
 export { default as Event } from "./Event";
 
@@ -45,6 +46,9 @@ export { default as Pin } from "./Pin";
 export { default as Reaction } from "./Reaction";
 
 export { default as Revision } from "./Revision";
+
+export { default as PropertyDefinition } from "./PropertyDefinition";
+export { default as PropertyDefinitionOption } from "./PropertyDefinitionOption";
 
 export { default as SearchQuery } from "./SearchQuery";
 

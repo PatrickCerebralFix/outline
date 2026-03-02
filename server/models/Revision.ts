@@ -4,6 +4,7 @@ import {
   DataType,
   BelongsTo,
   Column,
+  Default,
   DefaultScope,
   ForeignKey,
   Table,
@@ -11,7 +12,7 @@ import {
   Length as SimpleLength,
   BeforeDestroy,
 } from "sequelize-typescript";
-import type { ProsemirrorData } from "@shared/types";
+import type { DocumentProperties, ProsemirrorData } from "@shared/types";
 import { DocumentValidation, RevisionValidation } from "@shared/validations";
 import type { APIContext } from "@server/types";
 import Document from "./Document";
@@ -85,6 +86,12 @@ class Revision extends ParanoidModel<
   @SkipChangeset
   content: ProsemirrorData | null;
 
+  /** Snapshot of document properties at the time this revision was created. */
+  @Default({})
+  @Column(DataType.JSONB)
+  @SkipChangeset
+  properties: DocumentProperties;
+
   /** The icon at the time of the revision. */
   @Column
   @SkipChangeset
@@ -146,6 +153,7 @@ class Revision extends ParanoidModel<
     model.content = null;
     model.text = null;
     model.title = "";
+    model.properties = {};
   }
 
   // static methods
@@ -177,6 +185,7 @@ class Revision extends ParanoidModel<
       icon: document.icon,
       color: document.color,
       content: document.content,
+      properties: document.properties,
       userId: document.lastModifiedById,
       editorVersion: document.editorVersion,
       version: document.version,

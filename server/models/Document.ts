@@ -40,6 +40,7 @@ import {
 import { MaxLength } from "class-validator";
 import isUUID from "validator/lib/isUUID";
 import type {
+  DocumentProperties,
   NavigationNode,
   ProsemirrorData,
   SourceMetadata,
@@ -64,6 +65,7 @@ import Team from "./Team";
 import User from "./User";
 import UserMembership from "./UserMembership";
 import View from "./View";
+import DocumentProperty from "./DocumentProperty";
 import ArchivableModel from "./base/ArchivableModel";
 import Fix from "./decorators/Fix";
 import { DocumentHelper } from "./helpers/DocumentHelper";
@@ -351,6 +353,11 @@ class Document extends ArchivableModel<
   @Column(DataType.JSONB)
   @SkipChangeset
   content: ProsemirrorData | null;
+
+  /** Snapshot of structured document properties for fast reads and search indexing. */
+  @Default({})
+  @Column(DataType.JSONB)
+  properties: DocumentProperties;
 
   /**
    * The content of the document as YJS collaborative state, this column can be quite large and
@@ -672,6 +679,9 @@ class Document extends ArchivableModel<
   @HasMany(() => Revision)
   revisions: Revision[];
 
+  @HasMany(() => DocumentProperty)
+  documentProperties: DocumentProperty[];
+
   @HasMany(() => Relationship)
   relationships: Relationship[];
 
@@ -921,6 +931,7 @@ class Document extends ArchivableModel<
     this.title = revision.title;
     this.icon = revision.icon;
     this.color = revision.color;
+    this.properties = revision.properties;
   };
 
   /**
@@ -1131,6 +1142,14 @@ class Document extends ArchivableModel<
 
     if (options.detach) {
       this.collectionId = null;
+      this.properties = {};
+
+      await DocumentProperty.destroy({
+        where: {
+          documentId: this.id,
+        },
+        transaction,
+      });
     }
 
     return this.saveWithCtx(ctx, undefined, { name: "unpublish" });
@@ -1165,6 +1184,16 @@ class Document extends ArchivableModel<
     { collectionId }: { collectionId: string }
   ) => {
     const { transaction } = ctx.state;
+    const collectionChanged = this.collectionId !== collectionId;
+    const childDocumentIds = collectionChanged
+      ? await this.findAllChildDocumentIds(undefined, {
+          transaction,
+          paranoid: false,
+        })
+      : [];
+    const movedDocumentIds = collectionChanged
+      ? [this.id, ...childDocumentIds]
+      : [];
     const collection = collectionId
       ? await Collection.findByPk(collectionId, {
           includeDocumentStructure: true,
@@ -1202,6 +1231,28 @@ class Document extends ArchivableModel<
 
     if (this.archivedAt) {
       await this.restoreArchivedWithChildren(ctx, { collectionId });
+    }
+
+    if (collectionChanged && movedDocumentIds.length > 0) {
+      await (this.constructor as typeof Document).update(
+        {
+          properties: {},
+        },
+        {
+          where: {
+            id: movedDocumentIds,
+          },
+          transaction,
+          hooks: false,
+        }
+      );
+      await DocumentProperty.destroy({
+        where: {
+          documentId: movedDocumentIds,
+        },
+        transaction,
+      });
+      this.properties = {};
     }
 
     if (this.collection && collection) {

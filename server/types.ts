@@ -4,10 +4,12 @@ import type { InferAttributes, Model, Transaction } from "sequelize";
 import type { z } from "zod";
 import type {
   CollectionSort,
+  DocumentPropertyType,
   NavigationNode,
   Client,
   CollectionPermission,
   JSONValue,
+  DocumentPropertyValues,
   UnfurlResourceType,
   ProsemirrorData,
   UnfurlResponse,
@@ -531,6 +533,7 @@ export type DocumentJSONExport = {
   fullWidth: boolean;
   template: boolean;
   parentDocumentId: string | null;
+  properties?: DocumentPropertyValues;
 };
 
 export type AttachmentJSONExport = {
@@ -554,6 +557,20 @@ export type CollectionJSONExport = {
     icon?: string | null;
     sort: CollectionSort;
     documentStructure: NavigationNode[] | null;
+    propertyDefinitions?: {
+      id: string;
+      name: string;
+      description?: string | null;
+      type: DocumentPropertyType;
+      required: boolean;
+      options?: {
+        id: string;
+        label: string;
+        value: string;
+        color?: string | null;
+        index?: string | null;
+      }[];
+    }[];
   };
   documents: {
     [id: string]: DocumentJSONExport;

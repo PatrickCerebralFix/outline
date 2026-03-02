@@ -21,6 +21,57 @@ export enum StatusFilter {
   Draft = "draft",
 }
 
+export enum DocumentPropertyType {
+  Text = "text",
+  Number = "number",
+  Date = "date",
+  Select = "select",
+  MultiSelect = "multi_select",
+}
+
+export enum DocumentPropertyFilterOperator {
+  Equals = "eq",
+  Contains = "contains",
+  IsEmpty = "is_empty",
+  IsNotEmpty = "is_not_empty",
+  GreaterThan = "gt",
+  LessThan = "lt",
+  Between = "between",
+  IncludesAny = "includes_any",
+  IncludesAll = "includes_all",
+  Excludes = "excludes",
+}
+
+export interface DocumentPropertyOptionSnapshot {
+  id: string;
+  value: string;
+  color?: string | null;
+}
+
+export interface DocumentPropertySnapshot {
+  definitionId: string;
+  name: string;
+  type: DocumentPropertyType;
+  value: JSONValue;
+  options?: DocumentPropertyOptionSnapshot[];
+}
+
+export interface DocumentProperties {
+  [propertyDefinitionId: string]: DocumentPropertySnapshot;
+}
+
+export interface DocumentPropertyValues {
+  [propertyDefinitionId: string]: JSONValue | null;
+}
+
+export interface DocumentPropertyFilter {
+  propertyDefinitionId?: string;
+  propertyName?: string;
+  propertyType?: DocumentPropertyType;
+  operator: DocumentPropertyFilterOperator;
+  value?: JSONValue;
+}
+
 export enum SortFilter {
   CreatedAt = "createdAt",
   UpdatedAt = "updatedAt",
