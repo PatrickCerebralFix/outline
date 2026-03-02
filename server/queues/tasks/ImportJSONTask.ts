@@ -4,7 +4,7 @@ import find from "lodash/find";
 import mime from "mime-types";
 import { Fragment, Node } from "prosemirror-model";
 import { randomUUID } from "node:crypto";
-import type { ProsemirrorData } from "@shared/types";
+import { DocumentPropertyType, type ProsemirrorData } from "@shared/types";
 import { schema, serializer } from "@server/editor";
 import Logger from "@server/logging/Logger";
 import type { FileOperation } from "@server/models";
@@ -15,6 +15,7 @@ import type {
   DocumentJSONExport,
   JSONExportMetadata,
 } from "@server/types";
+import type { DocumentPropertyInput } from "@server/commands/documentPropertyUpdater";
 import type { FileTreeNode } from "@server/utils/ImportHelper";
 import ImportHelper from "@server/utils/ImportHelper";
 import type { StructuredImportData } from "./ImportTask";
@@ -46,6 +47,7 @@ export default class ImportJSONTask extends ImportTask {
     const output: StructuredImportData = {
       collections: [],
       documents: [],
+      propertyDefinitions: [],
       attachments: [],
     };
 
@@ -72,10 +74,40 @@ export default class ImportJSONTask extends ImportTask {
 
     function mapDocuments(
       documents: { [id: string]: DocumentJSONExport },
-      collectionId: string
+      collectionId: string,
+      definitionIdMap: Map<string, string>,
+      definitionTypeMap: Map<string, DocumentPropertyType>,
+      optionIdMap: Map<string, string>
     ) {
       Object.values(documents).forEach((node) => {
         const id = randomUUID();
+        const properties = node.properties
+          ? (Object.fromEntries(
+              Object.entries(node.properties).map(([propertyId, property]) => {
+                const mappedPropertyId =
+                  definitionIdMap.get(propertyId) ?? propertyId;
+                const rawValue = property;
+                const definitionType = definitionTypeMap.get(propertyId);
+                const shouldMapOptionIds =
+                  definitionType === DocumentPropertyType.Select ||
+                  definitionType === DocumentPropertyType.MultiSelect;
+                const mappedValue = shouldMapOptionIds
+                  ? Array.isArray(rawValue)
+                    ? rawValue.map((value) =>
+                        typeof value === "string"
+                          ? (optionIdMap.get(value) ?? value)
+                          : value
+                      )
+                    : typeof rawValue === "string"
+                      ? (optionIdMap.get(rawValue) ?? rawValue)
+                      : rawValue
+                  : rawValue;
+
+                return [mappedPropertyId, mappedValue];
+              })
+            ) as DocumentPropertyInput)
+          : undefined;
+
         output.documents.push({
           ...node,
           path: "",
@@ -89,6 +121,7 @@ export default class ImportJSONTask extends ImportTask {
           collectionId,
           externalId: node.id,
           mimeType: "application/json",
+          properties,
           parentDocumentId: node.parentDocumentId
             ? find(
                 output.documents,
@@ -98,6 +131,50 @@ export default class ImportJSONTask extends ImportTask {
           id,
         });
       });
+    }
+
+    function mapPropertyDefinitions(
+      item: CollectionJSONExport,
+      collectionId: string
+    ) {
+      const definitionIdMap = new Map<string, string>();
+      const definitionTypeMap = new Map<string, DocumentPropertyType>();
+      const optionIdMap = new Map<string, string>();
+
+      for (const definition of item.collection.propertyDefinitions ?? []) {
+        const definitionId = randomUUID();
+        definitionIdMap.set(definition.id, definitionId);
+        definitionTypeMap.set(definition.id, definition.type);
+
+        const options = (definition.options ?? []).map((option) => {
+          const optionId = randomUUID();
+          optionIdMap.set(option.id, optionId);
+          return {
+            id: optionId,
+            label: option.label,
+            value: option.value,
+            color: option.color,
+            index: option.index,
+          };
+        });
+
+        output.propertyDefinitions.push({
+          id: definitionId,
+          externalId: definition.id,
+          collectionId,
+          name: definition.name,
+          description: definition.description ?? null,
+          type: definition.type,
+          required: definition.required,
+          options,
+        });
+      }
+
+      return {
+        definitionIdMap,
+        definitionTypeMap,
+        optionIdMap,
+      };
     }
 
     function mapAttachments(attachments: {
@@ -143,15 +220,26 @@ export default class ImportJSONTask extends ImportTask {
       }
 
       const collectionId = randomUUID();
+      const { propertyDefinitions: _propertyDefinitions, ...collectionData } =
+        item.collection;
 
       output.collections.push({
-        ...item.collection,
+        ...collectionData,
         id: collectionId,
         externalId: item.collection.id,
       });
 
+      const { definitionIdMap, definitionTypeMap, optionIdMap } =
+        mapPropertyDefinitions(item, collectionId);
+
       if (Object.values(item.documents).length) {
-        mapDocuments(item.documents, collectionId);
+        mapDocuments(
+          item.documents,
+          collectionId,
+          definitionIdMap,
+          definitionTypeMap,
+          optionIdMap
+        );
       }
 
       if (Object.values(item.attachments).length) {

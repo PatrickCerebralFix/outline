@@ -32,6 +32,7 @@ export default class RevisionsProcessor extends BaseProcessor {
         if (
           previous &&
           isEqual(document.content, previous.content) &&
+          isEqual(document.properties, previous.properties) &&
           document.title === previous.title
         ) {
           return;

@@ -1,6 +1,8 @@
 import {
   DirectionFilter,
   DocumentPermission,
+  DocumentPropertyFilterOperator,
+  DocumentPropertyType,
   SortFilter,
   StatusFilter,
 } from "@shared/types";
@@ -16,6 +18,8 @@ import {
 } from "@server/test/factories";
 import UserMembership from "../UserMembership";
 import GroupMembership from "../GroupMembership";
+import PropertyDefinition from "../PropertyDefinition";
+import PropertyDefinitionOption from "../PropertyDefinitionOption";
 
 beforeEach(async () => {
   jest.resetAllMocks();
@@ -346,6 +350,890 @@ describe("SearchHelper", () => {
       expect(results.map((r) => r.document.id).sort()).toEqual(
         docsInCollection1.map((doc) => doc.id).sort()
       );
+    });
+
+    it("should filter by property definition ID", async () => {
+      const team = await buildTeam();
+      const user = await buildUser({ teamId: team.id });
+      const collection = await buildCollection({
+        teamId: team.id,
+        userId: user.id,
+      });
+      const definition = await PropertyDefinition.create({
+        name: "Engine",
+        description: null,
+        type: DocumentPropertyType.Text,
+        required: false,
+        collectionId: collection.id,
+        teamId: team.id,
+        createdById: user.id,
+        lastModifiedById: user.id,
+      });
+      const unityDocument = await buildDocument({
+        teamId: team.id,
+        userId: user.id,
+        collectionId: collection.id,
+      });
+      const unrealDocument = await buildDocument({
+        teamId: team.id,
+        userId: user.id,
+        collectionId: collection.id,
+      });
+
+      unityDocument.properties = {
+        [definition.id]: {
+          definitionId: definition.id,
+          name: definition.name,
+          type: definition.type,
+          value: "Unity",
+        },
+      };
+      unrealDocument.properties = {
+        [definition.id]: {
+          definitionId: definition.id,
+          name: definition.name,
+          type: definition.type,
+          value: "Unreal",
+        },
+      };
+      await unityDocument.save();
+      await unrealDocument.save();
+
+      const { results } = await SearchHelper.searchForUser(user, {
+        propertyFilters: [
+          {
+            propertyDefinitionId: definition.id,
+            operator: DocumentPropertyFilterOperator.Equals,
+            value: "Unity",
+          },
+        ],
+      });
+
+      expect(results.length).toBe(1);
+      expect(results[0].document.id).toBe(unityDocument.id);
+    });
+
+    it("should filter by semantic property name across collections", async () => {
+      const team = await buildTeam();
+      const user = await buildUser({ teamId: team.id });
+      const collectionA = await buildCollection({
+        teamId: team.id,
+        userId: user.id,
+      });
+      const collectionB = await buildCollection({
+        teamId: team.id,
+        userId: user.id,
+      });
+      const definitionA = await PropertyDefinition.create({
+        name: "Engine",
+        description: null,
+        type: DocumentPropertyType.Text,
+        required: false,
+        collectionId: collectionA.id,
+        teamId: team.id,
+        createdById: user.id,
+        lastModifiedById: user.id,
+      });
+      const definitionB = await PropertyDefinition.create({
+        name: "Engine",
+        description: null,
+        type: DocumentPropertyType.Text,
+        required: false,
+        collectionId: collectionB.id,
+        teamId: team.id,
+        createdById: user.id,
+        lastModifiedById: user.id,
+      });
+      const unityInCollectionA = await buildDocument({
+        teamId: team.id,
+        userId: user.id,
+        collectionId: collectionA.id,
+      });
+      const unrealInCollectionA = await buildDocument({
+        teamId: team.id,
+        userId: user.id,
+        collectionId: collectionA.id,
+      });
+      const unityInCollectionB = await buildDocument({
+        teamId: team.id,
+        userId: user.id,
+        collectionId: collectionB.id,
+      });
+
+      unityInCollectionA.properties = {
+        [definitionA.id]: {
+          definitionId: definitionA.id,
+          name: definitionA.name,
+          type: definitionA.type,
+          value: "Unity",
+        },
+      };
+      unrealInCollectionA.properties = {
+        [definitionA.id]: {
+          definitionId: definitionA.id,
+          name: definitionA.name,
+          type: definitionA.type,
+          value: "Unreal",
+        },
+      };
+      unityInCollectionB.properties = {
+        [definitionB.id]: {
+          definitionId: definitionB.id,
+          name: definitionB.name,
+          type: definitionB.type,
+          value: "Unity",
+        },
+      };
+      await unityInCollectionA.save();
+      await unrealInCollectionA.save();
+      await unityInCollectionB.save();
+
+      const { results } = await SearchHelper.searchForUser(user, {
+        propertyFilters: [
+          {
+            propertyName: "Engine",
+            propertyType: DocumentPropertyType.Text,
+            operator: DocumentPropertyFilterOperator.Contains,
+            value: "Unity",
+          },
+        ],
+      });
+
+      expect(results.length).toBe(2);
+      expect(results.map((result) => result.document.id).sort()).toEqual(
+        [unityInCollectionA.id, unityInCollectionB.id].sort()
+      );
+    });
+
+    it("should filter by semantic selected option value across collections", async () => {
+      const team = await buildTeam();
+      const user = await buildUser({ teamId: team.id });
+      const collectionA = await buildCollection({
+        teamId: team.id,
+        userId: user.id,
+      });
+      const collectionB = await buildCollection({
+        teamId: team.id,
+        userId: user.id,
+      });
+      const definitionA = await PropertyDefinition.create({
+        name: "Engine",
+        description: null,
+        type: DocumentPropertyType.Select,
+        required: false,
+        collectionId: collectionA.id,
+        teamId: team.id,
+        createdById: user.id,
+        lastModifiedById: user.id,
+      });
+      const definitionB = await PropertyDefinition.create({
+        name: "Engine",
+        description: null,
+        type: DocumentPropertyType.Select,
+        required: false,
+        collectionId: collectionB.id,
+        teamId: team.id,
+        createdById: user.id,
+        lastModifiedById: user.id,
+      });
+      const unityOptionA = await PropertyDefinitionOption.create({
+        propertyDefinitionId: definitionA.id,
+        teamId: team.id,
+        label: "Unity",
+        value: "Unity",
+        color: "#111111",
+        index: "0",
+        createdById: user.id,
+        lastModifiedById: user.id,
+      });
+      const unrealOptionA = await PropertyDefinitionOption.create({
+        propertyDefinitionId: definitionA.id,
+        teamId: team.id,
+        label: "Unreal",
+        value: "Unreal",
+        color: "#222222",
+        index: "1",
+        createdById: user.id,
+        lastModifiedById: user.id,
+      });
+      const unityOptionB = await PropertyDefinitionOption.create({
+        propertyDefinitionId: definitionB.id,
+        teamId: team.id,
+        label: "Unity",
+        value: "Unity",
+        color: "#333333",
+        index: "0",
+        createdById: user.id,
+        lastModifiedById: user.id,
+      });
+      const unityInCollectionA = await buildDocument({
+        teamId: team.id,
+        userId: user.id,
+        collectionId: collectionA.id,
+      });
+      const unrealInCollectionA = await buildDocument({
+        teamId: team.id,
+        userId: user.id,
+        collectionId: collectionA.id,
+      });
+      const unityInCollectionB = await buildDocument({
+        teamId: team.id,
+        userId: user.id,
+        collectionId: collectionB.id,
+      });
+
+      unityInCollectionA.properties = {
+        [definitionA.id]: {
+          definitionId: definitionA.id,
+          name: definitionA.name,
+          type: definitionA.type,
+          value: unityOptionA.id,
+          options: [
+            {
+              id: unityOptionA.id,
+              value: unityOptionA.value,
+              color: unityOptionA.color,
+            },
+          ],
+        },
+      };
+      unrealInCollectionA.properties = {
+        [definitionA.id]: {
+          definitionId: definitionA.id,
+          name: definitionA.name,
+          type: definitionA.type,
+          value: unrealOptionA.id,
+          options: [
+            {
+              id: unrealOptionA.id,
+              value: unrealOptionA.value,
+              color: unrealOptionA.color,
+            },
+          ],
+        },
+      };
+      unityInCollectionB.properties = {
+        [definitionB.id]: {
+          definitionId: definitionB.id,
+          name: definitionB.name,
+          type: definitionB.type,
+          value: unityOptionB.id,
+          options: [
+            {
+              id: unityOptionB.id,
+              value: unityOptionB.value,
+              color: unityOptionB.color,
+            },
+          ],
+        },
+      };
+      await unityInCollectionA.save();
+      await unrealInCollectionA.save();
+      await unityInCollectionB.save();
+
+      const { results } = await SearchHelper.searchForUser(user, {
+        propertyFilters: [
+          {
+            propertyName: "Engine",
+            propertyType: DocumentPropertyType.Select,
+            operator: DocumentPropertyFilterOperator.Equals,
+            value: "Unity",
+          },
+        ],
+      });
+
+      expect(results.length).toBe(2);
+      expect(results.map((result) => result.document.id).sort()).toEqual(
+        [unityInCollectionA.id, unityInCollectionB.id].sort()
+      );
+    });
+
+    it("should filter by number property with GreaterThan", async () => {
+      const team = await buildTeam();
+      const user = await buildUser({ teamId: team.id });
+      const collection = await buildCollection({
+        teamId: team.id,
+        userId: user.id,
+      });
+      const definition = await PropertyDefinition.create({
+        name: "Score",
+        description: null,
+        type: DocumentPropertyType.Number,
+        required: false,
+        collectionId: collection.id,
+        teamId: team.id,
+        createdById: user.id,
+        lastModifiedById: user.id,
+      });
+      const doc50 = await buildDocument({
+        teamId: team.id,
+        userId: user.id,
+        collectionId: collection.id,
+      });
+      const doc100 = await buildDocument({
+        teamId: team.id,
+        userId: user.id,
+        collectionId: collection.id,
+      });
+
+      doc50.properties = {
+        [definition.id]: {
+          definitionId: definition.id,
+          name: definition.name,
+          type: definition.type,
+          value: 50,
+        },
+      };
+      doc100.properties = {
+        [definition.id]: {
+          definitionId: definition.id,
+          name: definition.name,
+          type: definition.type,
+          value: 100,
+        },
+      };
+      await doc50.save();
+      await doc100.save();
+
+      const { results } = await SearchHelper.searchForUser(user, {
+        propertyFilters: [
+          {
+            propertyName: "Score",
+            propertyType: DocumentPropertyType.Number,
+            operator: DocumentPropertyFilterOperator.GreaterThan,
+            value: 75,
+          },
+        ],
+      });
+
+      expect(results.length).toBe(1);
+      expect(results[0].document.id).toBe(doc100.id);
+    });
+
+    it("should filter by number property with LessThan", async () => {
+      const team = await buildTeam();
+      const user = await buildUser({ teamId: team.id });
+      const collection = await buildCollection({
+        teamId: team.id,
+        userId: user.id,
+      });
+      const definition = await PropertyDefinition.create({
+        name: "Score",
+        description: null,
+        type: DocumentPropertyType.Number,
+        required: false,
+        collectionId: collection.id,
+        teamId: team.id,
+        createdById: user.id,
+        lastModifiedById: user.id,
+      });
+      const doc50 = await buildDocument({
+        teamId: team.id,
+        userId: user.id,
+        collectionId: collection.id,
+      });
+      const doc100 = await buildDocument({
+        teamId: team.id,
+        userId: user.id,
+        collectionId: collection.id,
+      });
+
+      doc50.properties = {
+        [definition.id]: {
+          definitionId: definition.id,
+          name: definition.name,
+          type: definition.type,
+          value: 50,
+        },
+      };
+      doc100.properties = {
+        [definition.id]: {
+          definitionId: definition.id,
+          name: definition.name,
+          type: definition.type,
+          value: 100,
+        },
+      };
+      await doc50.save();
+      await doc100.save();
+
+      const { results } = await SearchHelper.searchForUser(user, {
+        propertyFilters: [
+          {
+            propertyName: "Score",
+            propertyType: DocumentPropertyType.Number,
+            operator: DocumentPropertyFilterOperator.LessThan,
+            value: 75,
+          },
+        ],
+      });
+
+      expect(results.length).toBe(1);
+      expect(results[0].document.id).toBe(doc50.id);
+    });
+
+    it("should filter by number property with Between", async () => {
+      const team = await buildTeam();
+      const user = await buildUser({ teamId: team.id });
+      const collection = await buildCollection({
+        teamId: team.id,
+        userId: user.id,
+      });
+      const definition = await PropertyDefinition.create({
+        name: "Score",
+        description: null,
+        type: DocumentPropertyType.Number,
+        required: false,
+        collectionId: collection.id,
+        teamId: team.id,
+        createdById: user.id,
+        lastModifiedById: user.id,
+      });
+      const doc25 = await buildDocument({
+        teamId: team.id,
+        userId: user.id,
+        collectionId: collection.id,
+      });
+      const doc50 = await buildDocument({
+        teamId: team.id,
+        userId: user.id,
+        collectionId: collection.id,
+      });
+      const doc75 = await buildDocument({
+        teamId: team.id,
+        userId: user.id,
+        collectionId: collection.id,
+      });
+
+      doc25.properties = {
+        [definition.id]: {
+          definitionId: definition.id,
+          name: definition.name,
+          type: definition.type,
+          value: 25,
+        },
+      };
+      doc50.properties = {
+        [definition.id]: {
+          definitionId: definition.id,
+          name: definition.name,
+          type: definition.type,
+          value: 50,
+        },
+      };
+      doc75.properties = {
+        [definition.id]: {
+          definitionId: definition.id,
+          name: definition.name,
+          type: definition.type,
+          value: 75,
+        },
+      };
+      await doc25.save();
+      await doc50.save();
+      await doc75.save();
+
+      const { results } = await SearchHelper.searchForUser(user, {
+        propertyFilters: [
+          {
+            propertyName: "Score",
+            propertyType: DocumentPropertyType.Number,
+            operator: DocumentPropertyFilterOperator.Between,
+            value: [30, 60],
+          },
+        ],
+      });
+
+      expect(results.length).toBe(1);
+      expect(results[0].document.id).toBe(doc50.id);
+    });
+
+    it("should filter by date property with GreaterThan (After)", async () => {
+      const team = await buildTeam();
+      const user = await buildUser({ teamId: team.id });
+      const collection = await buildCollection({
+        teamId: team.id,
+        userId: user.id,
+      });
+      const definition = await PropertyDefinition.create({
+        name: "DueDate",
+        description: null,
+        type: DocumentPropertyType.Date,
+        required: false,
+        collectionId: collection.id,
+        teamId: team.id,
+        createdById: user.id,
+        lastModifiedById: user.id,
+      });
+      const docJan = await buildDocument({
+        teamId: team.id,
+        userId: user.id,
+        collectionId: collection.id,
+      });
+      const docJun = await buildDocument({
+        teamId: team.id,
+        userId: user.id,
+        collectionId: collection.id,
+      });
+
+      docJan.properties = {
+        [definition.id]: {
+          definitionId: definition.id,
+          name: definition.name,
+          type: definition.type,
+          value: "2024-01-15",
+        },
+      };
+      docJun.properties = {
+        [definition.id]: {
+          definitionId: definition.id,
+          name: definition.name,
+          type: definition.type,
+          value: "2024-06-15",
+        },
+      };
+      await docJan.save();
+      await docJun.save();
+
+      const { results } = await SearchHelper.searchForUser(user, {
+        propertyFilters: [
+          {
+            propertyName: "DueDate",
+            propertyType: DocumentPropertyType.Date,
+            operator: DocumentPropertyFilterOperator.GreaterThan,
+            value: "2024-03-01",
+          },
+        ],
+      });
+
+      expect(results.length).toBe(1);
+      expect(results[0].document.id).toBe(docJun.id);
+    });
+
+    it("should filter by date property with LessThan (Before)", async () => {
+      const team = await buildTeam();
+      const user = await buildUser({ teamId: team.id });
+      const collection = await buildCollection({
+        teamId: team.id,
+        userId: user.id,
+      });
+      const definition = await PropertyDefinition.create({
+        name: "DueDate",
+        description: null,
+        type: DocumentPropertyType.Date,
+        required: false,
+        collectionId: collection.id,
+        teamId: team.id,
+        createdById: user.id,
+        lastModifiedById: user.id,
+      });
+      const docJan = await buildDocument({
+        teamId: team.id,
+        userId: user.id,
+        collectionId: collection.id,
+      });
+      const docJun = await buildDocument({
+        teamId: team.id,
+        userId: user.id,
+        collectionId: collection.id,
+      });
+
+      docJan.properties = {
+        [definition.id]: {
+          definitionId: definition.id,
+          name: definition.name,
+          type: definition.type,
+          value: "2024-01-15",
+        },
+      };
+      docJun.properties = {
+        [definition.id]: {
+          definitionId: definition.id,
+          name: definition.name,
+          type: definition.type,
+          value: "2024-06-15",
+        },
+      };
+      await docJan.save();
+      await docJun.save();
+
+      const { results } = await SearchHelper.searchForUser(user, {
+        propertyFilters: [
+          {
+            propertyName: "DueDate",
+            propertyType: DocumentPropertyType.Date,
+            operator: DocumentPropertyFilterOperator.LessThan,
+            value: "2024-03-01",
+          },
+        ],
+      });
+
+      expect(results.length).toBe(1);
+      expect(results[0].document.id).toBe(docJan.id);
+    });
+
+    it("should filter by date property with Between", async () => {
+      const team = await buildTeam();
+      const user = await buildUser({ teamId: team.id });
+      const collection = await buildCollection({
+        teamId: team.id,
+        userId: user.id,
+      });
+      const definition = await PropertyDefinition.create({
+        name: "DueDate",
+        description: null,
+        type: DocumentPropertyType.Date,
+        required: false,
+        collectionId: collection.id,
+        teamId: team.id,
+        createdById: user.id,
+        lastModifiedById: user.id,
+      });
+      const docJan = await buildDocument({
+        teamId: team.id,
+        userId: user.id,
+        collectionId: collection.id,
+      });
+      const docJun = await buildDocument({
+        teamId: team.id,
+        userId: user.id,
+        collectionId: collection.id,
+      });
+      const docNov = await buildDocument({
+        teamId: team.id,
+        userId: user.id,
+        collectionId: collection.id,
+      });
+
+      docJan.properties = {
+        [definition.id]: {
+          definitionId: definition.id,
+          name: definition.name,
+          type: definition.type,
+          value: "2024-01-15",
+        },
+      };
+      docJun.properties = {
+        [definition.id]: {
+          definitionId: definition.id,
+          name: definition.name,
+          type: definition.type,
+          value: "2024-06-15",
+        },
+      };
+      docNov.properties = {
+        [definition.id]: {
+          definitionId: definition.id,
+          name: definition.name,
+          type: definition.type,
+          value: "2024-11-15",
+        },
+      };
+      await docJan.save();
+      await docJun.save();
+      await docNov.save();
+
+      const { results } = await SearchHelper.searchForUser(user, {
+        propertyFilters: [
+          {
+            propertyName: "DueDate",
+            propertyType: DocumentPropertyType.Date,
+            operator: DocumentPropertyFilterOperator.Between,
+            value: ["2024-02-01", "2024-08-01"],
+          },
+        ],
+      });
+
+      expect(results.length).toBe(1);
+      expect(results[0].document.id).toBe(docJun.id);
+    });
+
+    it("should filter by multiselect property with IncludesAny", async () => {
+      const team = await buildTeam();
+      const user = await buildUser({ teamId: team.id });
+      const collection = await buildCollection({
+        teamId: team.id,
+        userId: user.id,
+      });
+      const definition = await PropertyDefinition.create({
+        name: "Tags",
+        description: null,
+        type: DocumentPropertyType.MultiSelect,
+        required: false,
+        collectionId: collection.id,
+        teamId: team.id,
+        createdById: user.id,
+        lastModifiedById: user.id,
+      });
+      const docA = await buildDocument({
+        teamId: team.id,
+        userId: user.id,
+        collectionId: collection.id,
+      });
+      const docB = await buildDocument({
+        teamId: team.id,
+        userId: user.id,
+        collectionId: collection.id,
+      });
+
+      docA.properties = {
+        [definition.id]: {
+          definitionId: definition.id,
+          name: definition.name,
+          type: definition.type,
+          value: ["optA", "optB"],
+        },
+      };
+      docB.properties = {
+        [definition.id]: {
+          definitionId: definition.id,
+          name: definition.name,
+          type: definition.type,
+          value: ["optC"],
+        },
+      };
+      await docA.save();
+      await docB.save();
+
+      const { results } = await SearchHelper.searchForUser(user, {
+        propertyFilters: [
+          {
+            propertyName: "Tags",
+            propertyType: DocumentPropertyType.MultiSelect,
+            operator: DocumentPropertyFilterOperator.IncludesAny,
+            value: ["optB", "optC"],
+          },
+        ],
+      });
+
+      expect(results.length).toBe(2);
+      expect(results.map((r) => r.document.id).sort()).toEqual(
+        [docA.id, docB.id].sort()
+      );
+    });
+
+    it("should filter by multiselect property with IncludesAll", async () => {
+      const team = await buildTeam();
+      const user = await buildUser({ teamId: team.id });
+      const collection = await buildCollection({
+        teamId: team.id,
+        userId: user.id,
+      });
+      const definition = await PropertyDefinition.create({
+        name: "Tags",
+        description: null,
+        type: DocumentPropertyType.MultiSelect,
+        required: false,
+        collectionId: collection.id,
+        teamId: team.id,
+        createdById: user.id,
+        lastModifiedById: user.id,
+      });
+      const docA = await buildDocument({
+        teamId: team.id,
+        userId: user.id,
+        collectionId: collection.id,
+      });
+      const docB = await buildDocument({
+        teamId: team.id,
+        userId: user.id,
+        collectionId: collection.id,
+      });
+
+      docA.properties = {
+        [definition.id]: {
+          definitionId: definition.id,
+          name: definition.name,
+          type: definition.type,
+          value: ["optA", "optB"],
+        },
+      };
+      docB.properties = {
+        [definition.id]: {
+          definitionId: definition.id,
+          name: definition.name,
+          type: definition.type,
+          value: ["optC"],
+        },
+      };
+      await docA.save();
+      await docB.save();
+
+      const { results } = await SearchHelper.searchForUser(user, {
+        propertyFilters: [
+          {
+            propertyName: "Tags",
+            propertyType: DocumentPropertyType.MultiSelect,
+            operator: DocumentPropertyFilterOperator.IncludesAll,
+            value: ["optA", "optB"],
+          },
+        ],
+      });
+
+      expect(results.length).toBe(1);
+      expect(results[0].document.id).toBe(docA.id);
+    });
+
+    it("should filter by multiselect property with Excludes", async () => {
+      const team = await buildTeam();
+      const user = await buildUser({ teamId: team.id });
+      const collection = await buildCollection({
+        teamId: team.id,
+        userId: user.id,
+      });
+      const definition = await PropertyDefinition.create({
+        name: "Tags",
+        description: null,
+        type: DocumentPropertyType.MultiSelect,
+        required: false,
+        collectionId: collection.id,
+        teamId: team.id,
+        createdById: user.id,
+        lastModifiedById: user.id,
+      });
+      const docA = await buildDocument({
+        teamId: team.id,
+        userId: user.id,
+        collectionId: collection.id,
+      });
+      const docB = await buildDocument({
+        teamId: team.id,
+        userId: user.id,
+        collectionId: collection.id,
+      });
+
+      docA.properties = {
+        [definition.id]: {
+          definitionId: definition.id,
+          name: definition.name,
+          type: definition.type,
+          value: ["optA", "optB"],
+        },
+      };
+      docB.properties = {
+        [definition.id]: {
+          definitionId: definition.id,
+          name: definition.name,
+          type: definition.type,
+          value: ["optC"],
+        },
+      };
+      await docA.save();
+      await docB.save();
+
+      const { results } = await SearchHelper.searchForUser(user, {
+        propertyFilters: [
+          {
+            propertyName: "Tags",
+            propertyType: DocumentPropertyType.MultiSelect,
+            operator: DocumentPropertyFilterOperator.Excludes,
+            value: ["optA"],
+          },
+        ],
+      });
+
+      expect(results.length).toBe(1);
+      expect(results[0].document.id).toBe(docB.id);
     });
 
     it("should handle no collections", async () => {

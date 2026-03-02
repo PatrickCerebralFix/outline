@@ -4,7 +4,12 @@ import type { NavigationNode } from "@shared/types";
 import env from "@server/env";
 import Logger from "@server/logging/Logger";
 import type { Collection, FileOperation } from "@server/models";
-import { Attachment, Document } from "@server/models";
+import {
+  Attachment,
+  Document,
+  PropertyDefinition,
+  PropertyDefinitionOption,
+} from "@server/models";
 import { DocumentHelper } from "@server/models/helpers/DocumentHelper";
 import { ProsemirrorHelper } from "@server/models/helpers/ProsemirrorHelper";
 import { presentAttachment, presentCollection } from "@server/presenters";
@@ -81,6 +86,40 @@ export default class ExportJSONTask extends ExportTask {
       attachments: {},
     };
 
+    const propertyDefinitions = await PropertyDefinition.findAll({
+      where: {
+        collectionId: collection.id,
+      },
+      include: [
+        {
+          association: "options",
+          required: false,
+        },
+      ],
+      order: [
+        ["createdAt", "ASC"],
+        [{ model: PropertyDefinitionOption, as: "options" }, "index", "ASC"],
+      ],
+    });
+
+    output.collection.propertyDefinitions = propertyDefinitions.map(
+      (definition) => ({
+        id: definition.id,
+        name: definition.name,
+        description: definition.description,
+        type: definition.type,
+        required: definition.required,
+        options:
+          definition.options?.map((option) => ({
+            id: option.id,
+            label: option.label,
+            value: option.value,
+            color: option.color,
+            index: option.index,
+          })) ?? [],
+      })
+    );
+
     async function addAttachments(attachments: Attachment[]) {
       await Promise.all(
         attachments.map(async (attachment) => {
@@ -151,6 +190,11 @@ export default class ExportJSONTask extends ExportTask {
           fullWidth: document.fullWidth,
           template: document.template,
           parentDocumentId: document.parentDocumentId,
+          properties: Object.fromEntries(
+            Object.entries(document.properties ?? {}).map(
+              ([propertyId, property]) => [propertyId, property.value]
+            )
+          ),
         };
 
         if (node.children?.length > 0) {

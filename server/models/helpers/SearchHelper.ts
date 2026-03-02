@@ -11,8 +11,13 @@ import type {
   WhereOptions,
 } from "sequelize";
 import { Op, Sequelize } from "sequelize";
-import type { DateFilter } from "@shared/types";
-import { DirectionFilter, SortFilter } from "@shared/types";
+import type { DateFilter, DocumentPropertyFilter } from "@shared/types";
+import {
+  DirectionFilter,
+  DocumentPropertyFilterOperator,
+  DocumentPropertyType,
+  SortFilter,
+} from "@shared/types";
 import { StatusFilter } from "@shared/types";
 import { regexIndexOf, regexLastIndexOf } from "@shared/utils/string";
 import { getUrls } from "@shared/utils/urls";
@@ -63,6 +68,8 @@ type SearchOptions = {
   snippetMinWords?: number;
   /** The maximum number of words to be returned in the contextual snippet */
   snippetMaxWords?: number;
+  /** Structured property filters. */
+  propertyFilters?: DocumentPropertyFilter[];
   /** The field to sort results by */
   sort?: SortFilter;
   /** The sort direction */
@@ -662,6 +669,12 @@ export default class SearchHelper {
       });
     }
 
+    if (options.propertyFilters?.length) {
+      for (const propertyFilter of options.propertyFilters) {
+        where[Op.and].push(this.buildPropertyFilterWhere(propertyFilter));
+      }
+    }
+
     const statusQuery = [];
     if (options.statusFilter?.includes(StatusFilter.Published)) {
       statusQuery.push({
@@ -770,6 +783,547 @@ export default class SearchHelper {
     }
 
     return where;
+  }
+
+  private static buildPropertyFilterWhere(
+    propertyFilter: DocumentPropertyFilter
+  ): WhereOptions<Document> {
+    const {
+      propertyDefinitionId,
+      propertyName,
+      propertyType,
+      operator,
+      value,
+    } = propertyFilter;
+
+    if (propertyDefinitionId) {
+      return this.buildPropertyFilterWhereForDefinitionId({
+        propertyDefinitionId,
+        operator,
+        value,
+        propertyType,
+      });
+    }
+
+    if (!propertyName) {
+      throw ValidationError(
+        "Property filter must include propertyDefinitionId or propertyName"
+      );
+    }
+
+    const normalizedPropertyName = propertyName.trim();
+
+    if (!normalizedPropertyName) {
+      throw ValidationError("Invalid property name");
+    }
+
+    const propertiesExpr = `COALESCE("properties", '{}'::jsonb)`;
+    const propertyValueExpr = "prop.value -> 'value'";
+    const isEmptyExpr = this.buildPropertyIsEmptyExpression(propertyValueExpr);
+    const escapedName = sequelize.escape(normalizedPropertyName);
+    const matchParts = [`lower(prop.value ->> 'name') = lower(${escapedName})`];
+
+    if (propertyType) {
+      matchParts.push(
+        `prop.value ->> 'type' = ${sequelize.escape(propertyType)}`
+      );
+    }
+
+    const baseMatch = matchParts.join(" AND ");
+
+    switch (operator) {
+      case DocumentPropertyFilterOperator.Equals: {
+        if (value === undefined) {
+          throw ValidationError("Property filter value is required for eq");
+        }
+
+        const valueExpr = this.toJSONBExpression(value);
+        const optionValueCondition =
+          this.buildSelectedOptionValueMatchExpression(value);
+        const equalsCondition = optionValueCondition
+          ? `(${propertyValueExpr} = ${valueExpr} OR ${optionValueCondition})`
+          : `${propertyValueExpr} = ${valueExpr}`;
+
+        return Sequelize.where(
+          Sequelize.literal(
+            `EXISTS (
+              SELECT 1
+              FROM jsonb_each(${propertiesExpr}) AS prop(key, value)
+              WHERE ${baseMatch}
+                AND ${equalsCondition}
+            )`
+          ),
+          Op.eq,
+          true
+        ) as WhereOptions<Document>;
+      }
+
+      case DocumentPropertyFilterOperator.Contains: {
+        if (value === undefined) {
+          throw ValidationError(
+            "Property filter value is required for contains"
+          );
+        }
+
+        const containsExpr = this.toJSONBExpression(
+          Array.isArray(value) ? value : [value]
+        );
+        const scalarExpr = Array.isArray(value)
+          ? undefined
+          : this.toJSONBExpression(value);
+        const containsCondition = scalarExpr
+          ? `(${propertyValueExpr} = ${scalarExpr} OR ${propertyValueExpr} @> ${containsExpr})`
+          : `${propertyValueExpr} @> ${containsExpr}`;
+        const optionValueCondition =
+          this.buildSelectedOptionValueMatchExpression(value);
+        const finalCondition = optionValueCondition
+          ? `(${containsCondition} OR ${optionValueCondition})`
+          : containsCondition;
+
+        return Sequelize.where(
+          Sequelize.literal(
+            `EXISTS (
+              SELECT 1
+              FROM jsonb_each(${propertiesExpr}) AS prop(key, value)
+              WHERE ${baseMatch}
+                AND ${finalCondition}
+            )`
+          ),
+          Op.eq,
+          true
+        ) as WhereOptions<Document>;
+      }
+
+      case DocumentPropertyFilterOperator.IsEmpty:
+        return Sequelize.where(
+          Sequelize.literal(
+            `NOT EXISTS (
+              SELECT 1
+              FROM jsonb_each(${propertiesExpr}) AS prop(key, value)
+              WHERE ${baseMatch}
+                AND NOT ${isEmptyExpr}
+            )`
+          ),
+          Op.eq,
+          true
+        ) as WhereOptions<Document>;
+
+      case DocumentPropertyFilterOperator.IsNotEmpty:
+        return Sequelize.where(
+          Sequelize.literal(
+            `EXISTS (
+              SELECT 1
+              FROM jsonb_each(${propertiesExpr}) AS prop(key, value)
+              WHERE ${baseMatch}
+                AND NOT ${isEmptyExpr}
+            )`
+          ),
+          Op.eq,
+          true
+        ) as WhereOptions<Document>;
+
+      case DocumentPropertyFilterOperator.GreaterThan: {
+        if (value === undefined) {
+          throw ValidationError(
+            "Property filter value is required for gt"
+          );
+        }
+
+        const escapedValue = sequelize.escape(String(value));
+        const isNumeric =
+          typeof value === "number" ||
+          propertyType === DocumentPropertyType.Number;
+        const numericCondition = isNumeric
+          ? `jsonb_typeof(${propertyValueExpr}) = 'number' AND (${propertyValueExpr} #>> '{}')::numeric > ${escapedValue}::numeric`
+          : `jsonb_typeof(${propertyValueExpr}) = 'string' AND (${propertyValueExpr} #>> '{}') > ${escapedValue}`;
+
+        return Sequelize.where(
+          Sequelize.literal(
+            `EXISTS (
+              SELECT 1
+              FROM jsonb_each(${propertiesExpr}) AS prop(key, value)
+              WHERE ${baseMatch}
+                AND ${numericCondition}
+            )`
+          ),
+          Op.eq,
+          true
+        ) as WhereOptions<Document>;
+      }
+
+      case DocumentPropertyFilterOperator.LessThan: {
+        if (value === undefined) {
+          throw ValidationError(
+            "Property filter value is required for lt"
+          );
+        }
+
+        const escapedValue = sequelize.escape(String(value));
+        const isNumeric =
+          typeof value === "number" ||
+          propertyType === DocumentPropertyType.Number;
+        const numericCondition = isNumeric
+          ? `jsonb_typeof(${propertyValueExpr}) = 'number' AND (${propertyValueExpr} #>> '{}')::numeric < ${escapedValue}::numeric`
+          : `jsonb_typeof(${propertyValueExpr}) = 'string' AND (${propertyValueExpr} #>> '{}') < ${escapedValue}`;
+
+        return Sequelize.where(
+          Sequelize.literal(
+            `EXISTS (
+              SELECT 1
+              FROM jsonb_each(${propertiesExpr}) AS prop(key, value)
+              WHERE ${baseMatch}
+                AND ${numericCondition}
+            )`
+          ),
+          Op.eq,
+          true
+        ) as WhereOptions<Document>;
+      }
+
+      case DocumentPropertyFilterOperator.Between: {
+        if (!Array.isArray(value) || value.length !== 2) {
+          throw ValidationError(
+            "Property filter value must be a 2-element array for between"
+          );
+        }
+
+        const [min, max] = value;
+        const escapedMin = sequelize.escape(String(min));
+        const escapedMax = sequelize.escape(String(max));
+        const isNumeric =
+          typeof min === "number" ||
+          typeof max === "number" ||
+          propertyType === DocumentPropertyType.Number;
+        const betweenCondition = isNumeric
+          ? `jsonb_typeof(${propertyValueExpr}) = 'number' AND (${propertyValueExpr} #>> '{}')::numeric >= ${escapedMin}::numeric AND (${propertyValueExpr} #>> '{}')::numeric <= ${escapedMax}::numeric`
+          : `jsonb_typeof(${propertyValueExpr}) = 'string' AND (${propertyValueExpr} #>> '{}') >= ${escapedMin} AND (${propertyValueExpr} #>> '{}') <= ${escapedMax}`;
+
+        return Sequelize.where(
+          Sequelize.literal(
+            `EXISTS (
+              SELECT 1
+              FROM jsonb_each(${propertiesExpr}) AS prop(key, value)
+              WHERE ${baseMatch}
+                AND ${betweenCondition}
+            )`
+          ),
+          Op.eq,
+          true
+        ) as WhereOptions<Document>;
+      }
+
+      case DocumentPropertyFilterOperator.IncludesAny: {
+        if (!Array.isArray(value) || value.length === 0) {
+          throw ValidationError(
+            "Property filter value must be a non-empty array for includes_any"
+          );
+        }
+
+        const escapedValues = value.map((v) => sequelize.escape(String(v)));
+        const arrayLiteral = `ARRAY[${escapedValues.join(",")}]`;
+        const optionValueCondition = `EXISTS (
+          SELECT 1
+          FROM jsonb_array_elements(COALESCE(prop.value -> 'options', '[]'::jsonb)) AS option_item(option)
+          WHERE lower(option_item.option ->> 'value') = ANY(ARRAY[${value.map((v) => `lower(${sequelize.escape(String(v))})`).join(",")}])
+        )`;
+
+        return Sequelize.where(
+          Sequelize.literal(
+            `EXISTS (
+              SELECT 1
+              FROM jsonb_each(${propertiesExpr}) AS prop(key, value)
+              WHERE ${baseMatch}
+                AND (${propertyValueExpr} ?| ${arrayLiteral} OR ${optionValueCondition})
+            )`
+          ),
+          Op.eq,
+          true
+        ) as WhereOptions<Document>;
+      }
+
+      case DocumentPropertyFilterOperator.IncludesAll: {
+        if (!Array.isArray(value) || value.length === 0) {
+          throw ValidationError(
+            "Property filter value must be a non-empty array for includes_all"
+          );
+        }
+
+        const containsExpr = this.toJSONBExpression(value);
+
+        return Sequelize.where(
+          Sequelize.literal(
+            `EXISTS (
+              SELECT 1
+              FROM jsonb_each(${propertiesExpr}) AS prop(key, value)
+              WHERE ${baseMatch}
+                AND ${propertyValueExpr} @> ${containsExpr}
+            )`
+          ),
+          Op.eq,
+          true
+        ) as WhereOptions<Document>;
+      }
+
+      case DocumentPropertyFilterOperator.Excludes: {
+        if (!Array.isArray(value) || value.length === 0) {
+          throw ValidationError(
+            "Property filter value must be a non-empty array for excludes"
+          );
+        }
+
+        const escapedValues = value.map((v) => sequelize.escape(String(v)));
+        const arrayLiteral = `ARRAY[${escapedValues.join(",")}]`;
+        const optionValueCondition = `EXISTS (
+          SELECT 1
+          FROM jsonb_array_elements(COALESCE(prop.value -> 'options', '[]'::jsonb)) AS option_item(option)
+          WHERE lower(option_item.option ->> 'value') = ANY(ARRAY[${value.map((v) => `lower(${sequelize.escape(String(v))})`).join(",")}])
+        )`;
+
+        return Sequelize.where(
+          Sequelize.literal(
+            `NOT EXISTS (
+              SELECT 1
+              FROM jsonb_each(${propertiesExpr}) AS prop(key, value)
+              WHERE ${baseMatch}
+                AND (${propertyValueExpr} ?| ${arrayLiteral} OR ${optionValueCondition})
+            )`
+          ),
+          Op.eq,
+          true
+        ) as WhereOptions<Document>;
+      }
+
+      default:
+        throw ValidationError("Unsupported property filter operator");
+    }
+  }
+
+  private static buildPropertyFilterWhereForDefinitionId({
+    propertyDefinitionId,
+    operator,
+    value,
+    propertyType,
+  }: {
+    propertyDefinitionId: string;
+    operator: DocumentPropertyFilterOperator;
+    value: DocumentPropertyFilter["value"];
+    propertyType?: DocumentPropertyType;
+  }): WhereOptions<Document> {
+    const validDefinitionId = /^[0-9a-fA-F-]{36}$/.test(propertyDefinitionId);
+
+    if (!validDefinitionId) {
+      throw ValidationError("Invalid property definition ID");
+    }
+
+    const propertiesExpr = `COALESCE("properties", '{}'::jsonb)`;
+    const escapedDefinitionId = sequelize.escape(propertyDefinitionId);
+    const propertyValueExpr = `(${propertiesExpr} -> ${escapedDefinitionId} -> 'value')`;
+    const isEmptyExpr = this.buildPropertyIsEmptyExpression(propertyValueExpr);
+
+    switch (operator) {
+      case DocumentPropertyFilterOperator.Equals: {
+        if (value === undefined) {
+          throw ValidationError("Property filter value is required for eq");
+        }
+
+        return {
+          properties: {
+            [Op.contains]: {
+              [propertyDefinitionId]: {
+                value,
+              },
+            },
+          },
+        } as WhereOptions<Document>;
+      }
+
+      case DocumentPropertyFilterOperator.Contains: {
+        if (value === undefined) {
+          throw ValidationError(
+            "Property filter value is required for contains"
+          );
+        }
+
+        return {
+          properties: {
+            [Op.contains]: {
+              [propertyDefinitionId]: {
+                value: Array.isArray(value) ? value : [value],
+              },
+            },
+          },
+        } as WhereOptions<Document>;
+      }
+
+      case DocumentPropertyFilterOperator.IsEmpty:
+        return Sequelize.where(
+          Sequelize.literal(isEmptyExpr),
+          Op.eq,
+          true
+        ) as WhereOptions<Document>;
+
+      case DocumentPropertyFilterOperator.IsNotEmpty:
+        return Sequelize.where(
+          Sequelize.literal(`NOT ${isEmptyExpr}`),
+          Op.eq,
+          true
+        ) as WhereOptions<Document>;
+
+      case DocumentPropertyFilterOperator.GreaterThan: {
+        if (value === undefined) {
+          throw ValidationError(
+            "Property filter value is required for gt"
+          );
+        }
+
+        const escapedValue = sequelize.escape(String(value));
+        const isNumeric =
+          typeof value === "number" ||
+          propertyType === DocumentPropertyType.Number;
+        const numericCondition = isNumeric
+          ? `jsonb_typeof(${propertyValueExpr}) = 'number' AND (${propertyValueExpr} #>> '{}')::numeric > ${escapedValue}::numeric`
+          : `jsonb_typeof(${propertyValueExpr}) = 'string' AND (${propertyValueExpr} #>> '{}') > ${escapedValue}`;
+
+        return Sequelize.where(
+          Sequelize.literal(numericCondition),
+          Op.eq,
+          true
+        ) as WhereOptions<Document>;
+      }
+
+      case DocumentPropertyFilterOperator.LessThan: {
+        if (value === undefined) {
+          throw ValidationError(
+            "Property filter value is required for lt"
+          );
+        }
+
+        const escapedValue = sequelize.escape(String(value));
+        const isNumeric =
+          typeof value === "number" ||
+          propertyType === DocumentPropertyType.Number;
+        const numericCondition = isNumeric
+          ? `jsonb_typeof(${propertyValueExpr}) = 'number' AND (${propertyValueExpr} #>> '{}')::numeric < ${escapedValue}::numeric`
+          : `jsonb_typeof(${propertyValueExpr}) = 'string' AND (${propertyValueExpr} #>> '{}') < ${escapedValue}`;
+
+        return Sequelize.where(
+          Sequelize.literal(numericCondition),
+          Op.eq,
+          true
+        ) as WhereOptions<Document>;
+      }
+
+      case DocumentPropertyFilterOperator.Between: {
+        if (!Array.isArray(value) || value.length !== 2) {
+          throw ValidationError(
+            "Property filter value must be a 2-element array for between"
+          );
+        }
+
+        const [min, max] = value;
+        const escapedMin = sequelize.escape(String(min));
+        const escapedMax = sequelize.escape(String(max));
+        const isNumeric =
+          typeof min === "number" ||
+          typeof max === "number" ||
+          propertyType === DocumentPropertyType.Number;
+        const betweenCondition = isNumeric
+          ? `jsonb_typeof(${propertyValueExpr}) = 'number' AND (${propertyValueExpr} #>> '{}')::numeric >= ${escapedMin}::numeric AND (${propertyValueExpr} #>> '{}')::numeric <= ${escapedMax}::numeric`
+          : `jsonb_typeof(${propertyValueExpr}) = 'string' AND (${propertyValueExpr} #>> '{}') >= ${escapedMin} AND (${propertyValueExpr} #>> '{}') <= ${escapedMax}`;
+
+        return Sequelize.where(
+          Sequelize.literal(betweenCondition),
+          Op.eq,
+          true
+        ) as WhereOptions<Document>;
+      }
+
+      case DocumentPropertyFilterOperator.IncludesAny: {
+        if (!Array.isArray(value) || value.length === 0) {
+          throw ValidationError(
+            "Property filter value must be a non-empty array for includes_any"
+          );
+        }
+
+        const escapedValues = value.map((v) => sequelize.escape(String(v)));
+        const arrayLiteral = `ARRAY[${escapedValues.join(",")}]`;
+
+        return Sequelize.where(
+          Sequelize.literal(`${propertyValueExpr} ?| ${arrayLiteral}`),
+          Op.eq,
+          true
+        ) as WhereOptions<Document>;
+      }
+
+      case DocumentPropertyFilterOperator.IncludesAll: {
+        if (!Array.isArray(value) || value.length === 0) {
+          throw ValidationError(
+            "Property filter value must be a non-empty array for includes_all"
+          );
+        }
+
+        const containsExpr = this.toJSONBExpression(value);
+
+        return Sequelize.where(
+          Sequelize.literal(`${propertyValueExpr} @> ${containsExpr}`),
+          Op.eq,
+          true
+        ) as WhereOptions<Document>;
+      }
+
+      case DocumentPropertyFilterOperator.Excludes: {
+        if (!Array.isArray(value) || value.length === 0) {
+          throw ValidationError(
+            "Property filter value must be a non-empty array for excludes"
+          );
+        }
+
+        const escapedValues = value.map((v) => sequelize.escape(String(v)));
+        const arrayLiteral = `ARRAY[${escapedValues.join(",")}]`;
+
+        return Sequelize.where(
+          Sequelize.literal(
+            `NOT (${propertyValueExpr} ?| ${arrayLiteral})`
+          ),
+          Op.eq,
+          true
+        ) as WhereOptions<Document>;
+      }
+
+      default:
+        throw ValidationError("Unsupported property filter operator");
+    }
+  }
+
+  private static buildPropertyIsEmptyExpression(propertyValueExpr: string) {
+    return `(
+      ${propertyValueExpr} IS NULL OR
+      ${propertyValueExpr} = 'null'::jsonb OR
+      ${propertyValueExpr} = '[]'::jsonb OR
+      ${propertyValueExpr} = '""'::jsonb
+    )`;
+  }
+
+  private static toJSONBExpression(
+    value: Exclude<DocumentPropertyFilter["value"], undefined>
+  ) {
+    return `CAST(${sequelize.escape(JSON.stringify(value))} AS jsonb)`;
+  }
+
+  private static buildSelectedOptionValueMatchExpression(
+    value: DocumentPropertyFilter["value"]
+  ) {
+    if (typeof value !== "string" || !value.trim()) {
+      return null;
+    }
+
+    const escapedValue = sequelize.escape(value.trim());
+
+    return `EXISTS (
+      SELECT 1
+      FROM jsonb_array_elements(COALESCE(prop.value -> 'options', '[]'::jsonb)) AS option_item(option)
+      WHERE lower(option_item.option ->> 'value') = lower(${escapedValue})
+    )`;
   }
 
   private static buildResponse({

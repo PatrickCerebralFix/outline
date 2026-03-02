@@ -4,7 +4,11 @@ import chunk from "lodash/chunk";
 import truncate from "lodash/truncate";
 import type { InferCreationAttributes } from "sequelize";
 import tmp from "tmp";
-import type { CollectionSort, ProsemirrorData } from "@shared/types";
+import type {
+  CollectionSort,
+  DocumentPropertyType,
+  ProsemirrorData,
+} from "@shared/types";
 import {
   AttachmentPreset,
   CollectionPermission,
@@ -13,6 +17,7 @@ import {
 import { CollectionValidation } from "@shared/validations";
 import attachmentCreator from "@server/commands/attachmentCreator";
 import documentCreator from "@server/commands/documentCreator";
+import type { DocumentPropertyInput } from "@server/commands/documentPropertyUpdater";
 import { createContext } from "@server/context";
 import { InternalError, ValidationError } from "@server/errors";
 import Logger from "@server/logging/Logger";
@@ -23,6 +28,8 @@ import {
   Collection,
   FileOperation,
   Attachment,
+  PropertyDefinition,
+  PropertyDefinitionOption,
 } from "@server/models";
 import { sequelize } from "@server/storage/database";
 import ZipHelper from "@server/utils/ZipHelper";
@@ -86,8 +93,26 @@ export type StructuredImportData = {
     createdById?: string;
     createdByName?: string;
     createdByEmail?: string | null;
+    properties?: DocumentPropertyInput;
     path: string;
     mimeType: string;
+    /** Optional id from import source, useful for mapping */
+    externalId?: string;
+  }[];
+  propertyDefinitions: {
+    id: string;
+    collectionId: string;
+    name: string;
+    description?: string | null;
+    type: DocumentPropertyType;
+    required: boolean;
+    options: {
+      id: string;
+      label: string;
+      value: string;
+      color?: string | null;
+      index?: string | null;
+    }[];
     /** Optional id from import source, useful for mapping */
     externalId?: string;
   }[];
@@ -406,6 +431,46 @@ export default abstract class ImportTask extends BaseTask<Props> {
 
           collections.set(item.id, collection);
 
+          for (const propertyDefinition of data.propertyDefinitions.filter(
+            (definition) => definition.collectionId === collection.id
+          )) {
+            await PropertyDefinition.create(
+              {
+                id: propertyDefinition.id,
+                collectionId: collection.id,
+                teamId: fileOperation.teamId,
+                name: propertyDefinition.name,
+                description: propertyDefinition.description ?? null,
+                type: propertyDefinition.type,
+                required: propertyDefinition.required,
+                createdById: fileOperation.userId,
+                lastModifiedById: fileOperation.userId,
+              },
+              {
+                transaction,
+              }
+            );
+
+            for (const option of propertyDefinition.options) {
+              await PropertyDefinitionOption.create(
+                {
+                  id: option.id,
+                  propertyDefinitionId: propertyDefinition.id,
+                  teamId: fileOperation.teamId,
+                  label: option.label,
+                  value: option.value,
+                  color: option.color ?? null,
+                  index: option.index ?? null,
+                  createdById: fileOperation.userId,
+                  lastModifiedById: fileOperation.userId,
+                },
+                {
+                  transaction,
+                }
+              );
+            }
+          }
+
           // Documents
           for (const item of data.documents.filter(
             (d) => d.collectionId === collection.id
@@ -454,6 +519,8 @@ export default abstract class ImportTask extends BaseTask<Props> {
               publishedAt: item.updatedAt ?? item.createdAt ?? new Date(),
               parentDocumentId: item.parentDocumentId,
               importId: fileOperation.id,
+              properties: item.properties,
+              propertiesStrict: false,
             });
             documents.set(item.id, document);
 

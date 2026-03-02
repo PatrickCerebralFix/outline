@@ -103,6 +103,7 @@ export default class ImportMarkdownZipTask extends ImportTask {
     const output: StructuredImportData = {
       collections: [],
       documents: [],
+      propertyDefinitions: [],
       attachments: [],
     };
 
