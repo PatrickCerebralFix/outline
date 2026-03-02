@@ -10,8 +10,8 @@ import {
   TableHeaderColumnIcon,
   TableMergeCellsIcon,
   TableSplitCellsIcon,
-  SortAscendingIcon,
-  SortDescendingIcon,
+  CaretUpIcon,
+  CaretDownIcon,
   TableColumnsDistributeIcon,
 } from "outline-icons";
 import type { EditorState } from "prosemirror-state";
@@ -127,14 +127,14 @@ export default function tableColMenuItems(
       name: "sortTable",
       tooltip: dictionary.sortAsc,
       attrs: { index, direction: "asc" },
-      icon: <SortAscendingIcon />,
+      icon: <CaretUpIcon />,
       disabled: tableHasRowspan(state),
     },
     {
       name: "sortTable",
       tooltip: dictionary.sortDesc,
       attrs: { index, direction: "desc" },
-      icon: <SortDescendingIcon />,
+      icon: <CaretDownIcon />,
       disabled: tableHasRowspan(state),
     },
     {

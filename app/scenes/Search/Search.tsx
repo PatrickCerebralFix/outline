@@ -12,8 +12,12 @@ import type {
   SortFilter as TSortFilter,
   DirectionFilter as TDirectionFilter,
   DateFilter as TDateFilter,
+  DocumentPropertyType as TDocumentPropertyType,
 } from "@shared/types";
-import { StatusFilter as TStatusFilter } from "@shared/types";
+import {
+  DocumentPropertyFilterOperator as TDocumentPropertyFilterOperator,
+  StatusFilter as TStatusFilter,
+} from "@shared/types";
 import ArrowKeyNavigation from "~/components/ArrowKeyNavigation";
 import CollectionListItem from "~/components/CollectionListItem";
 import DocumentListItem from "~/components/DocumentListItem";
@@ -36,11 +40,183 @@ import CollectionFilter from "./components/CollectionFilter";
 import DateFilter from "./components/DateFilter";
 import { DocumentFilter } from "./components/DocumentFilter";
 import DocumentTypeFilter from "./components/DocumentTypeFilter";
+import type { PropertyFilterState } from "./components/PropertyFilter";
+import { PropertyFiltersSection } from "./components/PropertyFiltersSection";
 import RecentSearches from "./components/RecentSearches";
 import SearchInput from "./components/SearchInput";
 import { SortInput } from "./components/SortInput";
 import UserFilter from "./components/UserFilter";
 import { HStack } from "~/components/primitives/HStack";
+
+// ---------------------------------------------------------------------------
+// URL serialization helpers
+// ---------------------------------------------------------------------------
+
+const noValueOperators = new Set([
+  TDocumentPropertyFilterOperator.IsEmpty,
+  TDocumentPropertyFilterOperator.IsNotEmpty,
+]);
+
+const arrayOperators = new Set([
+  TDocumentPropertyFilterOperator.Between,
+  TDocumentPropertyFilterOperator.IncludesAny,
+  TDocumentPropertyFilterOperator.IncludesAll,
+  TDocumentPropertyFilterOperator.Excludes,
+]);
+
+const defaultFilter: PropertyFilterState = {
+  operator: TDocumentPropertyFilterOperator.Contains,
+};
+
+/**
+ * Parse property filters from URL search params.
+ *
+ * @param params - the current URL search params.
+ * @returns array of filter state objects.
+ */
+function parsePropertyFiltersFromUrl(
+  params: URLSearchParams
+): PropertyFilterState[] {
+  // Try new JSON format first
+  const raw = params.get("propertyFilters");
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw) as Array<{
+        name?: string;
+        type?: TDocumentPropertyType;
+        op?: TDocumentPropertyFilterOperator;
+        val?: string;
+      }>;
+
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed.map((entry) => ({
+          propertyName: entry.name || undefined,
+          propertyType: entry.type || undefined,
+          operator: entry.op || TDocumentPropertyFilterOperator.Contains,
+          value: entry.val || undefined,
+        }));
+      }
+    } catch {
+      // Invalid JSON — fall through to legacy params
+    }
+  }
+
+  // Legacy flat params
+  const legacyName = params.get("propertyName");
+  if (legacyName) {
+    return [
+      {
+        propertyName: legacyName,
+        propertyType:
+          (params.get("propertyType") as TDocumentPropertyType) || undefined,
+        operator:
+          (params.get(
+            "propertyOperator"
+          ) as TDocumentPropertyFilterOperator) ||
+          TDocumentPropertyFilterOperator.Contains,
+        value: params.get("propertyValue") || undefined,
+      },
+    ];
+  }
+
+  return [{ ...defaultFilter }];
+}
+
+/**
+ * Serialize property filter state array to a JSON string for the URL.
+ *
+ * @param filters - array of property filter states.
+ * @returns JSON string, or undefined if all filters are empty.
+ */
+function serializePropertyFiltersToUrl(
+  filters: PropertyFilterState[]
+): string | undefined {
+  // Only persist rows that have at least a property selected or a non-default operator
+  const meaningful = filters.filter(
+    (f) => f.propertyName || f.value
+  );
+
+  if (meaningful.length === 0) {
+    return undefined;
+  }
+
+  const compact = filters.map((f) => ({
+    ...(f.propertyName ? { name: f.propertyName } : {}),
+    ...(f.propertyType ? { type: f.propertyType } : {}),
+    op: f.operator,
+    ...(f.value ? { val: f.value } : {}),
+  }));
+
+  return JSON.stringify(compact);
+}
+
+/**
+ * Convert a raw string URL value to a typed API value.
+ *
+ * @param raw - the raw string value from the URL.
+ * @param operator - the filter operator.
+ * @param propertyType - the property type.
+ * @returns the typed value suitable for the API.
+ */
+function parsePropertyFilterValue(
+  raw: string | undefined,
+  operator: TDocumentPropertyFilterOperator,
+  propertyType: TDocumentPropertyType | undefined
+): string | number | string[] | undefined {
+  if (noValueOperators.has(operator) || !raw) {
+    return undefined;
+  }
+
+  if (arrayOperators.has(operator)) {
+    return raw.split(",").filter(Boolean);
+  }
+
+  if (
+    propertyType === ("number" as TDocumentPropertyType) &&
+    Number.isFinite(Number(raw))
+  ) {
+    return Number(raw);
+  }
+
+  return raw;
+}
+
+/**
+ * Determine whether a single filter row is complete enough to send to the API.
+ *
+ * @param f - the filter state.
+ * @returns true if the filter should be included in the API call.
+ */
+function isFilterComplete(f: PropertyFilterState): boolean {
+  if (!f.propertyName) {
+    return false;
+  }
+
+  if (noValueOperators.has(f.operator)) {
+    return true;
+  }
+
+  if (f.operator === TDocumentPropertyFilterOperator.Between) {
+    const parts = (f.value ?? "").split(",");
+    return parts.length === 2 && parts[0] !== "" && parts[1] !== "";
+  }
+
+  if (
+    [
+      TDocumentPropertyFilterOperator.IncludesAny,
+      TDocumentPropertyFilterOperator.IncludesAll,
+      TDocumentPropertyFilterOperator.Excludes,
+    ].includes(f.operator)
+  ) {
+    return (f.value ?? "").split(",").filter(Boolean).length > 0;
+  }
+
+  return (f.value ?? "").trim() !== "";
+}
+
+// ---------------------------------------------------------------------------
+// Component
+// ---------------------------------------------------------------------------
 
 function Search() {
   const { t } = useTranslation();
@@ -75,7 +251,42 @@ function Search() {
   const sort = (params.get("sort") as TSortFilter) ?? "";
   const direction = (params.get("direction") as TDirectionFilter) ?? "";
 
-  const isSearchable = !!(query || collectionId || userId);
+  // Multi-property filter state derived from URL
+  const propertyFiltersState = React.useMemo(
+    () => parsePropertyFiltersFromUrl(params),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [
+      params.get("propertyFilters"),
+      params.get("propertyName"),
+      params.get("propertyType"),
+      params.get("propertyOperator"),
+      params.get("propertyValue"),
+    ]
+  );
+
+  // Build API-ready property filters from state
+  const propertyFilters = React.useMemo(() => {
+    const complete = propertyFiltersState.filter(isFilterComplete);
+    if (complete.length === 0) {
+      return undefined;
+    }
+
+    return complete.map((f) => ({
+      propertyName: f.propertyName,
+      propertyType: f.propertyType,
+      operator: f.operator,
+      value: noValueOperators.has(f.operator)
+        ? undefined
+        : parsePropertyFilterValue(f.value, f.operator, f.propertyType),
+    }));
+  }, [propertyFiltersState]);
+
+  const isSearchable = !!(
+    query ||
+    collectionId ||
+    userId ||
+    (propertyFilters && propertyFilters.length > 0)
+  );
 
   const document = documentId ? documents.get(documentId) : undefined;
 
@@ -85,6 +296,7 @@ function Search() {
     user: !document || !!(document && query),
     documentType: isSearchable,
     date: isSearchable,
+    property: !document,
     title: !!query && !document,
     includeChildCollections: !!collectionId && !document,
     sort: isSearchable,
@@ -102,6 +314,7 @@ function Search() {
       includeChildCollections,
       sort,
       direction,
+      propertyFilters,
     }),
     [
       query,
@@ -114,6 +327,7 @@ function Search() {
       includeChildCollections,
       sort,
       direction,
+      JSON.stringify(propertyFilters),
     ]
   );
 
@@ -188,6 +402,58 @@ function Search() {
       ),
     });
   };
+
+  // Shared helper: write property filter state to URL, clearing legacy params
+  const writePropertyFiltersToUrl = React.useCallback(
+    (nextFilters: PropertyFilterState[]) => {
+      const parsed = queryString.parse(location.search);
+
+      // Remove legacy flat params
+      delete parsed.propertyName;
+      delete parsed.propertyType;
+      delete parsed.propertyOperator;
+      delete parsed.propertyValue;
+
+      const serialized = serializePropertyFiltersToUrl(nextFilters);
+      if (serialized) {
+        parsed.propertyFilters = serialized;
+      } else {
+        delete parsed.propertyFilters;
+      }
+
+      history.replace({
+        pathname: location.pathname,
+        search: queryString.stringify(parsed, { skipEmptyString: true }),
+      });
+    },
+    [history, location.pathname, location.search]
+  );
+
+  const handlePropertyFilterChange = React.useCallback(
+    (index: number, updates: Partial<PropertyFilterState>) => {
+      const next = propertyFiltersState.map((f, i) =>
+        i === index ? { ...f, ...updates } : f
+      );
+      writePropertyFiltersToUrl(next);
+    },
+    [propertyFiltersState, writePropertyFiltersToUrl]
+  );
+
+  const handleAddPropertyFilter = React.useCallback(() => {
+    const next = [...propertyFiltersState, { ...defaultFilter }];
+    writePropertyFiltersToUrl(next);
+  }, [propertyFiltersState, writePropertyFiltersToUrl]);
+
+  const handleRemovePropertyFilter = React.useCallback(
+    (index: number) => {
+      const next = propertyFiltersState.filter((_, i) => i !== index);
+      // Always keep at least one row
+      writePropertyFiltersToUrl(
+        next.length > 0 ? next : [{ ...defaultFilter }]
+      );
+    },
+    [propertyFiltersState, writePropertyFiltersToUrl]
+  );
 
   // All filters go through the query string so that searches are bookmarkable, which neccesitates
   // some complexity as the query string is the source of truth for the filters.
@@ -294,77 +560,89 @@ function Search() {
             defaultValue={query ?? ""}
           />
 
-          <Filters>
-            <Flex align="center" gap={4}>
-              {filterVisibility.document && (
-                <DocumentFilter
-                  document={document!}
-                  onClick={() => {
-                    handleFilterChange({ documentId: undefined });
-                  }}
-                />
-              )}
-              {filterVisibility.collection && (
-                <CollectionFilter
-                  collectionId={collectionId}
-                  onSelect={(collectionId) =>
-                    handleFilterChange({ collectionId })
+          <FilterContainer>
+            <PrimaryFilters>
+              <Flex align="center" gap={4}>
+                {filterVisibility.document && (
+                  <DocumentFilter
+                    document={document!}
+                    onClick={() => {
+                      handleFilterChange({ documentId: undefined });
+                    }}
+                  />
+                )}
+                {filterVisibility.collection && (
+                  <CollectionFilter
+                    collectionId={collectionId}
+                    onSelect={(collectionId) =>
+                      handleFilterChange({ collectionId })
+                    }
+                  />
+                )}
+                {filterVisibility.user && (
+                  <UserFilter
+                    userId={userId}
+                    onSelect={(userId) => handleFilterChange({ userId })}
+                  />
+                )}
+                {filterVisibility.documentType && (
+                  <DocumentTypeFilter
+                    statusFilter={statusFilter}
+                    onSelect={({ statusFilter }) =>
+                      handleFilterChange({ statusFilter })
+                    }
+                  />
+                )}
+                {filterVisibility.date && (
+                  <DateFilter
+                    dateFilter={dateFilter}
+                    onSelect={(dateFilter) =>
+                      handleFilterChange({ dateFilter })
+                    }
+                  />
+                )}
+                {filterVisibility.title && (
+                  <ToggleFilter
+                    width={26}
+                    height={14}
+                    label={t("Search titles only")}
+                    onChange={(checked: boolean) => {
+                      handleFilterChange({ titleFilter: checked });
+                    }}
+                    checked={titleFilter}
+                  />
+                )}
+                {filterVisibility.includeChildCollections && (
+                  <ToggleFilter
+                    width={26}
+                    height={14}
+                    label={t("Include nested")}
+                    onChange={(checked: boolean) => {
+                      handleFilterChange({ includeChildCollections: checked });
+                    }}
+                    checked={includeChildCollections}
+                  />
+                )}
+              </Flex>
+              {filterVisibility.sort && (
+                <SortInput
+                  sort={sort}
+                  direction={direction}
+                  onSelect={(sort, direction) =>
+                    handleFilterChange({ sort, direction })
                   }
                 />
               )}
-              {filterVisibility.user && (
-                <UserFilter
-                  userId={userId}
-                  onSelect={(userId) => handleFilterChange({ userId })}
-                />
-              )}
-              {filterVisibility.documentType && (
-                <DocumentTypeFilter
-                  statusFilter={statusFilter}
-                  onSelect={({ statusFilter }) =>
-                    handleFilterChange({ statusFilter })
-                  }
-                />
-              )}
-              {filterVisibility.date && (
-                <DateFilter
-                  dateFilter={dateFilter}
-                  onSelect={(dateFilter) => handleFilterChange({ dateFilter })}
-                />
-              )}
-              {filterVisibility.title && (
-                <SearchTitlesFilter
-                  width={26}
-                  height={14}
-                  label={t("Search titles only")}
-                  onChange={(checked: boolean) => {
-                    handleFilterChange({ titleFilter: checked });
-                  }}
-                  checked={titleFilter}
-                />
-              )}
-              {filterVisibility.includeChildCollections && (
-                <IncludeChildCollectionsFilter
-                  width={26}
-                  height={14}
-                  label={t("Include nested")}
-                  onChange={(checked: boolean) => {
-                    handleFilterChange({ includeChildCollections: checked });
-                  }}
-                  checked={includeChildCollections}
-                />
-              )}
-            </Flex>
-            {filterVisibility.sort && (
-              <SortInput
-                sort={sort}
-                direction={direction}
-                onSelect={(sort, direction) =>
-                  handleFilterChange({ sort, direction })
-                }
+            </PrimaryFilters>
+            {filterVisibility.property && (
+              <PropertyFiltersSection
+                filters={propertyFiltersState}
+                onChange={handlePropertyFilterChange}
+                onAdd={handleAddPropertyFilter}
+                onRemove={handleRemovePropertyFilter}
               />
             )}
-          </Filters>
+          </FilterContainer>
         </form>
         {isSearchable ? (
           <>
@@ -468,11 +746,8 @@ const StyledArrowKeyNavigation = styled(ArrowKeyNavigation)`
   flex: 1;
 `;
 
-const Filters = styled(HStack)`
-  flex-wrap: wrap;
-  justify-content: space-between;
+const FilterContainer = styled.div`
   margin-bottom: 12px;
-  transition: opacity 100ms ease-in-out;
   padding: 8px 0;
 
   ${breakpoint("tablet")`
@@ -480,15 +755,13 @@ const Filters = styled(HStack)`
   `};
 `;
 
-const SearchTitlesFilter = styled(Switch)`
-  white-space: nowrap;
-  margin-left: 8px;
-  margin-top: 8px;
-  font-size: 14px;
-  font-weight: 400;
+const PrimaryFilters = styled(HStack)`
+  flex-wrap: wrap;
+  justify-content: space-between;
+  transition: opacity 100ms ease-in-out;
 `;
 
-const IncludeChildCollectionsFilter = styled(Switch)`
+const ToggleFilter = styled(Switch)`
   white-space: nowrap;
   font-size: 14px;
   font-weight: 400;

@@ -1,6 +1,12 @@
 import uniq from "lodash/uniq";
 import { observer } from "mobx-react";
-import { useMemo, useEffect, useCallback, Suspense } from "react";
+import {
+  useMemo,
+  useEffect,
+  useCallback,
+  Suspense,
+  type ReactNode,
+} from "react";
 import { Controller, useForm } from "react-hook-form";
 import { Trans, useTranslation } from "react-i18next";
 import styled from "styled-components";
@@ -59,9 +65,11 @@ const useIconColor = (collection?: Collection) => {
 export const CollectionForm = observer(function CollectionForm_({
   handleSubmit,
   collection,
+  afterFields,
 }: {
   handleSubmit: (data: FormData) => void;
   collection?: Collection;
+  afterFields?: ReactNode;
 }) {
   const team = useCurrentTeam();
   const { t } = useTranslation();
@@ -229,6 +237,8 @@ export const CollectionForm = observer(function CollectionForm_({
           )}
         </Collapsible>
       )}
+
+      {afterFields}
 
       <HStack justify="flex-end">
         <Button

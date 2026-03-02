@@ -129,7 +129,7 @@ export interface Props extends Omit<
   React.InputHTMLAttributes<HTMLInputElement | HTMLTextAreaElement>,
   "prefix"
 > {
-  type?: "text" | "email" | "checkbox" | "search" | "textarea" | "password";
+  type?: "text" | "email" | "checkbox" | "search" | "textarea" | "password" | "number" | "date";
   labelHidden?: boolean;
   label?: string;
   flex?: boolean;

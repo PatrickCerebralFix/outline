@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import useStores from "~/hooks/useStores";
 import type { FormData } from "./CollectionForm";
 import { CollectionForm } from "./CollectionForm";
+import { CollectionPropertyDefinitions } from "./CollectionPropertyDefinitions";
 
 type Props = {
   collectionId: string;
@@ -29,5 +30,13 @@ export const CollectionEdit = observer(function CollectionEdit_({
     [collection, onSubmit]
   );
 
-  return <CollectionForm collection={collection} handleSubmit={handleSubmit} />;
+  return (
+    <CollectionForm
+      collection={collection}
+      handleSubmit={handleSubmit}
+      afterFields={
+        <CollectionPropertyDefinitions collectionId={collectionId} />
+      }
+    />
+  );
 });

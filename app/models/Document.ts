@@ -4,6 +4,7 @@ import capitalize from "lodash/capitalize";
 import floor from "lodash/floor";
 import { action, autorun, comparer, computed, observable, set } from "mobx";
 import type {
+  DocumentPropertyValues,
   JSONObject,
   NavigationNode,
   ProsemirrorData,
@@ -65,6 +66,10 @@ export default class Document extends ArchivableModel implements Searchable {
 
   @observable.shallow
   data: ProsemirrorData;
+
+  @Field
+  @observable.shallow
+  properties: DocumentPropertyValues = {};
 
   /**
    * The original data source of the document, if imported.

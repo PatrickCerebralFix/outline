@@ -4,7 +4,11 @@ import filter from "lodash/filter";
 import omitBy from "lodash/omitBy";
 import orderBy from "lodash/orderBy";
 import { observable, action, computed, runInAction } from "mobx";
-import type { DirectionFilter, SortFilter } from "@shared/types";
+import type {
+  DirectionFilter,
+  DocumentPropertyFilter,
+  SortFilter,
+} from "@shared/types";
 import {
   AttachmentPreset,
   SubscriptionType,
@@ -42,6 +46,7 @@ export type SearchParams = {
   includeChildCollections?: boolean;
   userId?: string;
   shareId?: string;
+  propertyFilters?: DocumentPropertyFilter[];
   sort?: SortFilter;
   direction?: DirectionFilter;
 };
@@ -423,12 +428,19 @@ export default class DocumentsStore extends Store<Document> {
   @action
   searchTitles = async (options?: SearchParams): Promise<SearchResult[]> => {
     const compactedOptions = omitBy(
-      options,
+      {
+        ...options,
+        propertyFilters: options?.propertyFilters?.map((propertyFilter) => ({
+          propertyDefinitionId: propertyFilter.propertyDefinitionId,
+          propertyName: propertyFilter.propertyName,
+          propertyType: propertyFilter.propertyType,
+          operator: propertyFilter.operator,
+          value: propertyFilter.value,
+        })),
+      },
       (o) => o === undefined || o === null || o === ""
     );
-    const res = await client.post("/documents.search_titles", {
-      ...compactedOptions,
-    });
+    const res = await client.post("/documents.search_titles", compactedOptions);
     invariant(res?.data, "Search response should be available");
 
     // add the documents and associated policies to the store
@@ -457,12 +469,19 @@ export default class DocumentsStore extends Store<Document> {
   @action
   search = async (options: SearchParams): Promise<SearchResult[]> => {
     const compactedOptions = omitBy(
-      options,
+      {
+        ...options,
+        propertyFilters: options?.propertyFilters?.map((propertyFilter) => ({
+          propertyDefinitionId: propertyFilter.propertyDefinitionId,
+          propertyName: propertyFilter.propertyName,
+          propertyType: propertyFilter.propertyType,
+          operator: propertyFilter.operator,
+          value: propertyFilter.value,
+        })),
+      },
       (o) => o === undefined || o === null || o === ""
     );
-    const res = await client.post("/documents.search", {
-      ...compactedOptions,
-    });
+    const res = await client.post("/documents.search", compactedOptions);
     invariant(res?.data, "Search response should be available");
 
     // add the documents and associated policies to the store

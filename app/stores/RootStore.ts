@@ -23,6 +23,7 @@ import OAuthAuthenticationsStore from "./OAuthAuthenticationsStore";
 import OAuthClientsStore from "./OAuthClientsStore";
 import PinsStore from "./PinsStore";
 import PoliciesStore from "./PoliciesStore";
+import PropertyDefinitionsStore from "./PropertyDefinitionsStore";
 import RevisionsStore from "./RevisionsStore";
 import SearchesStore from "./SearchesStore";
 import SharesStore from "./SharesStore";
@@ -58,6 +59,7 @@ export default class RootStore {
   presence: DocumentPresenceStore;
   pins: PinsStore;
   policies: PoliciesStore;
+  propertyDefinitions: PropertyDefinitionsStore;
   revisions: RevisionsStore;
   searches: SearchesStore;
   shares: SharesStore;
@@ -91,6 +93,7 @@ export default class RootStore {
     this.registerStore(OAuthClientsStore, "oauthClients");
     this.registerStore(PinsStore);
     this.registerStore(PoliciesStore);
+    this.registerStore(PropertyDefinitionsStore);
     this.registerStore(RevisionsStore);
     this.registerStore(SearchesStore);
     this.registerStore(SharesStore);

@@ -32,6 +32,7 @@ import {
 import { decodeURIComponentSafe } from "~/utils/urls";
 import MultiplayerEditor from "./AsyncMultiplayerEditor";
 import DocumentMeta from "./DocumentMeta";
+import { DocumentProperties } from "./DocumentProperties";
 import DocumentTitle from "./DocumentTitle";
 import first from "lodash/first";
 import { getLangFor } from "~/utils/language";
@@ -230,6 +231,12 @@ function DocumentEditor(props: Props, ref: React.RefObject<any>) {
           rtl={direction === "rtl"}
         />
       )}
+      {!shareId && document.collectionId ? (
+        <DocumentProperties
+          document={document}
+          readOnly={readOnly || !can.update}
+        />
+      ) : null}
       <EditorComponent
         ref={mergeRefs([ref, handleRefChanged])}
         lang={getLangFor(document.language)}

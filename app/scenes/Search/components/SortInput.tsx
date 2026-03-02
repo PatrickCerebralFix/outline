@@ -1,5 +1,5 @@
 import type { DirectionFilter, SortFilter as TSortFilter } from "@shared/types";
-import { SortAscendingIcon, SortDescendingIcon } from "outline-icons";
+import { CaretDownIcon, CaretUpIcon } from "outline-icons";
 import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import FilterOptions from "~/components/FilterOptions";
@@ -20,37 +20,37 @@ export const SortInput = ({ sort, direction, onSelect }: Props) => {
       {
         key: "relevance-DESC",
         label: t("Relevance"),
-        icon: <SortDescendingIcon size={20} />,
+        icon: <CaretDownIcon size={20} />,
       },
       {
         key: "updatedAt-DESC",
         label: t("Recently updated"),
-        icon: <SortDescendingIcon size={20} />,
+        icon: <CaretDownIcon size={20} />,
       },
       {
         key: "updatedAt-ASC",
         label: t("Least recently updated"),
-        icon: <SortAscendingIcon size={20} />,
+        icon: <CaretUpIcon size={20} />,
       },
       {
         key: "createdAt-DESC",
         label: t("Newest"),
-        icon: <SortDescendingIcon size={20} />,
+        icon: <CaretDownIcon size={20} />,
       },
       {
         key: "createdAt-ASC",
         label: t("Oldest"),
-        icon: <SortAscendingIcon size={20} />,
+        icon: <CaretUpIcon size={20} />,
       },
       {
         key: "title-ASC",
         label: t("A → Z"),
-        icon: <SortAscendingIcon size={20} />,
+        icon: <CaretUpIcon size={20} />,
       },
       {
         key: "title-DESC",
         label: t("Z → A"),
-        icon: <SortDescendingIcon size={20} />,
+        icon: <CaretDownIcon size={20} />,
       },
     ],
     [t]
