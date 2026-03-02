@@ -5,6 +5,7 @@ import { DocumentHelper } from "@server/models/helpers/DocumentHelper";
 import { ProsemirrorHelper } from "@server/models/helpers/ProsemirrorHelper";
 import type { APIContext } from "@server/types";
 import documentCreator from "./documentCreator";
+import type { DocumentPropertyInput } from "./documentPropertyUpdater";
 
 type Props = {
   /** The document to duplicate */
@@ -30,6 +31,15 @@ export default async function documentDuplicator(
     collectionId: collection?.id,
     publish: publish ?? !!document.publishedAt,
   };
+  const sourceProperties =
+    collection?.id === document.collectionId
+      ? (Object.fromEntries(
+          Object.entries(document.properties ?? {}).map(([id, property]) => [
+            id,
+            property.value,
+          ])
+        ) as DocumentPropertyInput)
+      : undefined;
 
   const duplicated = await documentCreator(ctx, {
     parentDocumentId,
@@ -45,6 +55,7 @@ export default async function documentDuplicator(
       ...document.sourceMetadata,
       originalDocumentId: document.id,
     },
+    properties: sourceProperties,
     ...sharedProperties,
   });
 
@@ -95,6 +106,14 @@ export default async function documentDuplicator(
           ...childDocument.sourceMetadata,
           originalDocumentId: childDocument.id,
         },
+        properties:
+          collection?.id === childDocument.collectionId
+            ? (Object.fromEntries(
+                Object.entries(childDocument.properties ?? {}).map(
+                  ([id, property]) => [id, property.value]
+                )
+              ) as DocumentPropertyInput)
+            : undefined,
         ...sharedProperties,
       });
 

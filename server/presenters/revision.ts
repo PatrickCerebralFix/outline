@@ -16,6 +16,12 @@ async function presentRevision(revision: Revision, html?: string) {
     data: await DocumentHelper.toJSON(revision),
     icon: revision.icon ?? emoji,
     color: revision.color,
+    properties: Object.fromEntries(
+      Object.entries(revision.properties ?? {}).map(([id, property]) => [
+        id,
+        property.value,
+      ])
+    ),
     collaborators: (await revision.collaborators).map((user) =>
       presentUser(user)
     ),

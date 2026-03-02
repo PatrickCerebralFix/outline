@@ -3,6 +3,12 @@ import { Event, Document } from "@server/models";
 import { DocumentHelper } from "@server/models/helpers/DocumentHelper";
 import { TextHelper } from "@server/models/helpers/TextHelper";
 import type { APIContext } from "@server/types";
+import {
+  applyDocumentPropertyUpdate,
+  prepareDocumentPropertyUpdate,
+  type DocumentPropertyInput,
+  validateRequiredDocumentProperties,
+} from "./documentPropertyUpdater";
 
 type Props = {
   /** The existing document */
@@ -31,6 +37,8 @@ type Props = {
   publish?: boolean;
   /** The ID of the collection to publish the document to */
   collectionId?: string | null;
+  /** Structured document properties keyed by property definition ID */
+  properties?: DocumentPropertyInput;
 };
 
 /**
@@ -56,11 +64,15 @@ export default async function documentUpdater(
     publish,
     collectionId,
     done,
+    properties,
   }: Props
 ): Promise<Document> {
   const { user } = ctx.state.auth;
   const { transaction } = ctx.state;
   const cId = collectionId || document.collectionId;
+  let propertyUpdatePlan:
+    | Awaited<ReturnType<typeof prepareDocumentPropertyUpdate>>
+    | undefined;
 
   if (title !== undefined) {
     document.title = title.trim();
@@ -92,6 +104,23 @@ export default async function documentUpdater(
       editMode
     );
   }
+  if (properties !== undefined) {
+    propertyUpdatePlan = await prepareDocumentPropertyUpdate(
+      ctx,
+      document,
+      properties,
+      {
+        collectionId: cId,
+      }
+    );
+    document.properties = propertyUpdatePlan.properties;
+  }
+
+  if ((document.publishedAt || publish) && cId) {
+    await validateRequiredDocumentProperties(ctx, document, {
+      collectionId: cId,
+    });
+  }
 
   const changed = document.changed();
   const eventData = done !== undefined ? { done } : undefined;
@@ -118,6 +147,10 @@ export default async function documentUpdater(
       actorId: user.id,
       teamId: document.teamId,
     });
+  }
+
+  if (propertyUpdatePlan) {
+    await applyDocumentPropertyUpdate(ctx, document, propertyUpdatePlan);
   }
 
   return await Document.findByPk(document.id, {

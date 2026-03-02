@@ -5,6 +5,8 @@ import presentAvailableTeam from "./availableTeam";
 import presentCollection from "./collection";
 import presentComment from "./comment";
 import presentDocument from "./document";
+import presentDocumentProperty from "./documentProperty";
+import presentEmoji from "./emoji";
 import presentEvent from "./event";
 import presentFileOperation from "./fileOperation";
 import presentGroup from "./group";
@@ -20,6 +22,7 @@ import presentProviderConfig from "./providerConfig";
 import presentPublicTeam from "./publicTeam";
 import presentReaction from "./reaction";
 import presentRelationship from "./relationship";
+import presentPropertyDefinition from "./propertyDefinition";
 import presentRevision from "./revision";
 import presentSearchQuery from "./searchQuery";
 import presentShare from "./share";
@@ -28,7 +31,6 @@ import presentSubscription from "./subscription";
 import presentTeam from "./team";
 import presentUser from "./user";
 import presentView from "./view";
-import presentEmoji from "./emoji";
 
 export {
   presentApiKey,
@@ -38,6 +40,8 @@ export {
   presentCollection,
   presentComment,
   presentDocument,
+  presentDocumentProperty,
+  presentEmoji,
   presentEvent,
   presentFileOperation,
   presentGroup,
@@ -51,6 +55,7 @@ export {
   presentPublicTeam,
   presentPin,
   presentPolicies,
+  presentPropertyDefinition,
   presentProviderConfig,
   presentReaction,
   presentRelationship,
@@ -62,5 +67,4 @@ export {
   presentTeam,
   presentUser,
   presentView,
-  presentEmoji,
 };

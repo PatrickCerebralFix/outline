@@ -5,6 +5,12 @@ import { Document } from "@server/models";
 import { DocumentHelper } from "@server/models/helpers/DocumentHelper";
 import { ProsemirrorHelper } from "@server/models/helpers/ProsemirrorHelper";
 import type { APIContext } from "@server/types";
+import {
+  applyDocumentPropertyUpdate,
+  prepareDocumentPropertyUpdate,
+  type DocumentPropertyInput,
+  validateRequiredDocumentProperties,
+} from "./documentPropertyUpdater";
 
 type Props = Optional<
   Pick<
@@ -33,6 +39,8 @@ type Props = Optional<
   publish?: boolean;
   index?: number;
   templateDocument?: Document | null;
+  properties?: DocumentPropertyInput;
+  propertiesStrict?: boolean;
 };
 
 export default async function documentCreator(
@@ -61,11 +69,16 @@ export default async function documentCreator(
     editorVersion,
     publishedAt,
     sourceMetadata,
+    properties,
+    propertiesStrict,
   }: Props
 ): Promise<Document> {
   const { user } = ctx.state.auth;
   const { transaction } = ctx.state;
   const templateId = templateDocument ? templateDocument.id : undefined;
+  let propertyUpdatePlan:
+    | Awaited<ReturnType<typeof prepareDocumentPropertyUpdate>>
+    | undefined;
 
   const eventData = importId || apiImportId ? { source: "import" } : undefined;
 
@@ -109,6 +122,15 @@ export default async function documentCreator(
             )
         : ProsemirrorHelper.toProsemirror("").toJSON();
 
+  const templateProperties = templateDocument?.properties
+    ? (Object.fromEntries(
+        Object.entries(templateDocument.properties).map(([id, property]) => [
+          id,
+          property.value,
+        ])
+      ) as DocumentPropertyInput)
+    : undefined;
+
   const document = Document.build({
     id,
     urlId,
@@ -132,7 +154,28 @@ export default async function documentCreator(
     title: titleWithReplacements,
     content: contentWithReplacements,
     state,
+    properties: {},
   });
+
+  const propertiesToApply = properties ?? templateProperties;
+
+  if (propertiesToApply !== undefined) {
+    propertyUpdatePlan = await prepareDocumentPropertyUpdate(
+      ctx,
+      document,
+      propertiesToApply,
+      {
+        strict: properties !== undefined ? (propertiesStrict ?? true) : false,
+      }
+    );
+    document.properties = propertyUpdatePlan.properties;
+  }
+
+  if (publish && collectionId) {
+    await validateRequiredDocumentProperties(ctx, document, {
+      collectionId,
+    });
+  }
 
   document.text = await DocumentHelper.toMarkdown(document, {
     includeTitle: false,
@@ -158,6 +201,10 @@ export default async function documentCreator(
       event: !!document.title,
       data: eventData,
     });
+  }
+
+  if (propertyUpdatePlan) {
+    await applyDocumentPropertyUpdate(ctx, document, propertyUpdatePlan);
   }
 
   // reload to get all of the data needed to present (user, collection etc)

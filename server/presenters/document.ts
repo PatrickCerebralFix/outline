@@ -58,6 +58,12 @@ async function presentDocument(
     text,
     icon: document.icon,
     color: document.color,
+    properties: Object.fromEntries(
+      Object.entries(document.properties ?? {}).map(([id, property]) => [
+        id,
+        property.value,
+      ])
+    ),
     tasks: {
       completed: 0,
       total: 0,

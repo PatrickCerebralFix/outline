@@ -15,6 +15,7 @@ import "./notification";
 import "./oauthClient";
 import "./oauthAuthentication";
 import "./pins";
+import "./propertyDefinition";
 import "./reaction";
 import "./revision";
 import "./searchQuery";

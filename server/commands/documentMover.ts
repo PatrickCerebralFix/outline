@@ -1,6 +1,6 @@
 import { Transaction } from "sequelize";
 import { traceFunction } from "@server/logging/tracing";
-import { Document, Collection, Pin } from "@server/models";
+import { Document, Collection, DocumentProperty, Pin } from "@server/models";
 import type { APIContext } from "@server/types";
 
 type Props = {
@@ -131,6 +131,7 @@ async function documentMover(
       // Efficiently find the ID's of all the documents that are children of
       // the moved document and update in one query
       const childDocumentIds = await document.findAllChildDocumentIds();
+      const movedDocumentIds = [document.id, ...childDocumentIds];
 
       if (collectionId) {
         // Reload the collection to get relationship data
@@ -171,6 +172,28 @@ async function documentMover(
           }
         );
       }
+
+      // Properties are collection-scoped, so moving across collections or to drafts
+      // requires clearing them from both normalized and denormalized storage.
+      document.properties = {};
+      await Document.update(
+        {
+          properties: {},
+        },
+        {
+          transaction,
+          hooks: false,
+          where: {
+            id: movedDocumentIds,
+          },
+        }
+      );
+      await DocumentProperty.destroy({
+        where: {
+          documentId: movedDocumentIds,
+        },
+        transaction,
+      });
 
       // We must reload from the database to get the relationship data
       const documents = await Document.findAll({

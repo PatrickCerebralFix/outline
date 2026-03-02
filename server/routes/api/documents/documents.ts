@@ -28,6 +28,11 @@ import documentCreator from "@server/commands/documentCreator";
 import documentDuplicator from "@server/commands/documentDuplicator";
 import documentLoader from "@server/commands/documentLoader";
 import documentMover from "@server/commands/documentMover";
+import {
+  applyDocumentPropertyUpdate,
+  prepareDocumentPropertyUpdate,
+  toDocumentPropertyInput,
+} from "@server/commands/documentPropertyUpdater";
 import documentPermanentDeleter from "@server/commands/documentPermanentDeleter";
 import documentUpdater from "@server/commands/documentUpdater";
 import env from "@server/env";
@@ -48,8 +53,9 @@ import {
   Attachment,
   Relationship,
   Collection,
-  Document,
-  Event,
+    Document,
+    DocumentProperty,
+    Event,
   Revision,
   SearchQuery,
   User,
@@ -992,7 +998,40 @@ router.post(
       authorize(document, "restore", revision);
 
       await document.restoreFromRevision(revision);
+
+      let propertyUpdatePlan:
+        | Awaited<ReturnType<typeof prepareDocumentPropertyUpdate>>
+        | undefined;
+
+      if (document.collectionId) {
+        propertyUpdatePlan = await prepareDocumentPropertyUpdate(
+          ctx,
+          document,
+          toDocumentPropertyInput(revision.properties ?? {}),
+          {
+            collectionId: document.collectionId,
+            strict: false,
+          }
+        );
+        document.properties = propertyUpdatePlan.properties;
+      } else {
+        document.properties = {};
+      }
+
       await document.saveWithCtx(ctx, undefined, { name: "restore" });
+
+      if (propertyUpdatePlan) {
+        await applyDocumentPropertyUpdate(ctx, document, propertyUpdatePlan, {
+          replace: true,
+        });
+      } else {
+        await DocumentProperty.destroy({
+          where: {
+            documentId: document.id,
+          },
+          transaction,
+        });
+      }
     } else {
       assertPresent(revisionId, "revisionId is required");
     }
@@ -1018,6 +1057,7 @@ router.post(
       collectionId,
       includeChildCollections,
       userId,
+      propertyFilters,
       sort,
       direction,
     } = ctx.input.body;
@@ -1048,6 +1088,7 @@ router.post(
       query,
       dateFilter,
       statusFilter,
+      propertyFilters,
       collectionIds,
       collaboratorIds,
       offset,
@@ -1086,6 +1127,7 @@ router.post(
       shareId,
       snippetMinWords,
       snippetMaxWords,
+      propertyFilters,
       sort,
       direction,
     } = ctx.input.body;
@@ -1137,6 +1179,7 @@ router.post(
         share,
         dateFilter,
         statusFilter,
+        propertyFilters,
         offset,
         limit,
         snippetMinWords,
@@ -1192,6 +1235,7 @@ router.post(
         documentIds,
         dateFilter,
         statusFilter,
+        propertyFilters,
         offset,
         limit,
         snippetMinWords,
@@ -1263,19 +1307,28 @@ router.post(
       authorize(user, "createTemplate", user.team);
     }
 
-    const document = await Document.createWithCtx(ctx, {
+    const templateProperties =
+      collectionId && original.properties
+        ? Object.fromEntries(
+            Object.entries(original.properties).map(([id, property]) => [
+              id,
+              property.value,
+            ])
+          )
+        : undefined;
+
+    const document = await documentCreator(ctx, {
       editorVersion: original.editorVersion,
       collectionId,
-      teamId: user.teamId,
-      publishedAt: publish ? new Date() : null,
-      lastModifiedById: user.id,
-      createdById: user.id,
       template: true,
       icon: original.icon,
       color: original.color,
       title: original.title,
-      text: original.text,
       content: original.content,
+      fullWidth: original.fullWidth,
+      publish,
+      properties: templateProperties,
+      propertiesStrict: false,
     });
 
     // reload to get all of the data needed to present (user, collection etc)
@@ -1299,7 +1352,7 @@ router.post(
   transaction(),
   async (ctx: APIContext<T.DocumentsUpdateReq>) => {
     const { transaction } = ctx.state;
-    const { id, insightsEnabled, publish, collectionId, ...input } =
+    const { id, insightsEnabled, publish, collectionId, properties, ...input } =
       ctx.input.body;
     const editorVersion = ctx.headers["x-editor-version"] as string | undefined;
 
@@ -1357,6 +1410,7 @@ router.post(
       collectionId,
       insightsEnabled,
       editorVersion,
+      properties,
     });
 
     ctx.body = {
@@ -1703,6 +1757,7 @@ router.post(
       templateId,
       template,
       createdAt,
+      properties,
     } = ctx.input.body;
     const editorVersion = ctx.headers["x-editor-version"] as string | undefined;
 
@@ -1771,6 +1826,7 @@ router.post(
       template,
       fullWidth,
       editorVersion,
+      properties,
     });
 
     if (collection) {

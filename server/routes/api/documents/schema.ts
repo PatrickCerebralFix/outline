@@ -4,6 +4,8 @@ import { z } from "zod";
 import {
   DirectionFilter,
   DocumentPermission,
+  DocumentPropertyType,
+  DocumentPropertyFilterOperator,
   StatusFilter,
   TextEditMode,
   SortFilter,
@@ -71,6 +73,28 @@ const BaseSearchSchema = DateFilterSchema.extend({
 
   /** Max words to be accomodated in the results snippets */
   snippetMaxWords: z.number().default(30),
+
+  /** Structured property filters for document metadata */
+  propertyFilters: z
+    .array(
+      z
+        .object({
+          propertyDefinitionId: z.string().uuid().optional(),
+          propertyName: z.string().trim().min(1).max(255).optional(),
+          propertyType: z.nativeEnum(DocumentPropertyType).optional(),
+          operator: z.nativeEnum(DocumentPropertyFilterOperator),
+          value: z
+            .union([z.string(), z.number(), z.array(z.string()), z.null()])
+            .optional(),
+        })
+        .refine(
+          (filter) => !!filter.propertyDefinitionId || !!filter.propertyName,
+          {
+            message: "Either propertyDefinitionId or propertyName is required",
+          }
+        )
+    )
+    .optional(),
 });
 
 const BaseIdSchema = z.object({
@@ -288,6 +312,14 @@ export const DocumentsUpdateSchema = BaseSchema.extend({
 
     /** Whether the editing session is complete */
     done: z.boolean().optional(),
+
+    /** Structured document properties keyed by property definition ID */
+    properties: z
+      .record(
+        z.string().uuid(),
+        z.union([z.string(), z.number(), z.array(z.string()), z.null()])
+      )
+      .optional(),
   }),
 })
   .refine(
@@ -438,6 +470,14 @@ export const DocumentsCreateSchema = BaseSchema.extend({
 
     /** Whether this should be considered a template */
     template: z.boolean().optional(),
+
+    /** Structured document properties keyed by property definition ID */
+    properties: z
+      .record(
+        z.string().uuid(),
+        z.union([z.string(), z.number(), z.array(z.string()), z.null()])
+      )
+      .optional(),
   }),
 }).refine(
   (req) =>
