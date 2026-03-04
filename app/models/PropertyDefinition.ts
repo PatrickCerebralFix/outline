@@ -2,6 +2,7 @@ import { observable } from "mobx";
 import type { DocumentPropertyType } from "@shared/types";
 import ParanoidModel from "~/models/base/ParanoidModel";
 import Field from "~/models/decorators/Field";
+import type PropertyDefinitionsStore from "~/stores/PropertyDefinitionsStore";
 
 export interface PropertyDefinitionOption {
   id?: string;
@@ -13,6 +14,12 @@ export interface PropertyDefinitionOption {
 
 class PropertyDefinition extends ParanoidModel {
   static modelName = "PropertyDefinition";
+
+  constructor(fields: Record<string, any>, store: PropertyDefinitionsStore) {
+    super(fields, store);
+
+    this.options = Array.isArray(fields.options) ? fields.options : [];
+  }
 
   @Field
   @observable
@@ -36,7 +43,7 @@ class PropertyDefinition extends ParanoidModel {
 
   @Field
   @observable.shallow
-  options: PropertyDefinitionOption[] = [];
+  options: PropertyDefinitionOption[];
 }
 
 export default PropertyDefinition;

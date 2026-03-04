@@ -1234,24 +1234,16 @@ class Document extends ArchivableModel<
     }
 
     if (collectionChanged && movedDocumentIds.length > 0) {
-      await (this.constructor as typeof Document).update(
-        {
-          properties: {},
-        },
-        {
-          where: {
-            id: movedDocumentIds,
-          },
+      await Promise.all([
+        (this.constructor as typeof Document).update(
+          { properties: {} },
+          { where: { id: movedDocumentIds }, transaction, hooks: false }
+        ),
+        DocumentProperty.destroy({
+          where: { documentId: movedDocumentIds },
           transaction,
-          hooks: false,
-        }
-      );
-      await DocumentProperty.destroy({
-        where: {
-          documentId: movedDocumentIds,
-        },
-        transaction,
-      });
+        }),
+      ]);
       this.properties = {};
     }
 

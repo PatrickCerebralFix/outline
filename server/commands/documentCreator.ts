@@ -8,8 +8,8 @@ import type { APIContext } from "@server/types";
 import {
   applyDocumentPropertyUpdate,
   prepareDocumentPropertyUpdate,
+  toDocumentPropertyInput,
   type DocumentPropertyInput,
-  validateRequiredDocumentProperties,
 } from "./documentPropertyUpdater";
 
 type Props = Optional<
@@ -123,12 +123,7 @@ export default async function documentCreator(
         : ProsemirrorHelper.toProsemirror("").toJSON();
 
   const templateProperties = templateDocument?.properties
-    ? (Object.fromEntries(
-        Object.entries(templateDocument.properties).map(([id, property]) => [
-          id,
-          property.value,
-        ])
-      ) as DocumentPropertyInput)
+    ? toDocumentPropertyInput(templateDocument.properties)
     : undefined;
 
   const document = Document.build({
@@ -157,9 +152,9 @@ export default async function documentCreator(
     properties: {},
   });
 
-  const propertiesToApply = properties ?? templateProperties;
+  const propertiesToApply = properties ?? templateProperties ?? {};
 
-  if (propertiesToApply !== undefined) {
+  if (collectionId || Object.keys(propertiesToApply).length > 0) {
     propertyUpdatePlan = await prepareDocumentPropertyUpdate(
       ctx,
       document,
@@ -169,12 +164,6 @@ export default async function documentCreator(
       }
     );
     document.properties = propertyUpdatePlan.properties;
-  }
-
-  if (publish && collectionId) {
-    await validateRequiredDocumentProperties(ctx, document, {
-      collectionId,
-    });
   }
 
   document.text = await DocumentHelper.toMarkdown(document, {

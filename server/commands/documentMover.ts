@@ -1,7 +1,8 @@
 import { Transaction } from "sequelize";
 import { traceFunction } from "@server/logging/tracing";
-import { Document, Collection, DocumentProperty, Pin } from "@server/models";
+import { Document, Collection, Pin } from "@server/models";
 import type { APIContext } from "@server/types";
+import { clearDocumentProperties } from "./documentPropertyUpdater";
 
 type Props = {
   /** Document which is being moved */
@@ -176,24 +177,7 @@ async function documentMover(
       // Properties are collection-scoped, so moving across collections or to drafts
       // requires clearing them from both normalized and denormalized storage.
       document.properties = {};
-      await Document.update(
-        {
-          properties: {},
-        },
-        {
-          transaction,
-          hooks: false,
-          where: {
-            id: movedDocumentIds,
-          },
-        }
-      );
-      await DocumentProperty.destroy({
-        where: {
-          documentId: movedDocumentIds,
-        },
-        transaction,
-      });
+      await clearDocumentProperties(movedDocumentIds, transaction);
 
       // We must reload from the database to get the relationship data
       const documents = await Document.findAll({

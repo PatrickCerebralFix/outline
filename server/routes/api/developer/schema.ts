@@ -8,3 +8,9 @@ export const CreateTestUsersSchema = BaseSchema.extend({
 });
 
 export type CreateTestUsersReq = z.infer<typeof CreateTestUsersSchema>;
+
+export const CreateTestUserSchema = BaseSchema.extend({
+  body: z.object({}),
+});
+
+export type CreateTestUserReq = z.infer<typeof CreateTestUserSchema>;

@@ -3,6 +3,7 @@ import { traceFunction } from "@server/logging/tracing";
 import type { Document } from "@server/models";
 import { DocumentHelper } from "@server/models/helpers/DocumentHelper";
 import type { APIContext } from "@server/types";
+import { toDocumentPropertyValues } from "@server/utils/documentProperties";
 import presentUser from "./user";
 
 type Options = {
@@ -58,12 +59,7 @@ async function presentDocument(
     text,
     icon: document.icon,
     color: document.color,
-    properties: Object.fromEntries(
-      Object.entries(document.properties ?? {}).map(([id, property]) => [
-        id,
-        property.value,
-      ])
-    ),
+    properties: toDocumentPropertyValues(document.properties ?? {}),
     tasks: {
       completed: 0,
       total: 0,

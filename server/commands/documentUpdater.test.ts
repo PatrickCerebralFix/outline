@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 import * as Y from "yjs";
-import { TextEditMode } from "@shared/types";
+import { DocumentPropertyType, TextEditMode } from "@shared/types";
 import { APIUpdateExtension } from "@server/collaboration/APIUpdateExtension";
-import { Event } from "@server/models";
+import { DocumentProperty, Event, PropertyDefinition } from "@server/models";
 import { ProsemirrorHelper } from "@server/models/helpers/ProsemirrorHelper";
-import { buildDocument, buildUser } from "@server/test/factories";
+import { buildCollection, buildDocument, buildUser } from "@server/test/factories";
 import { withAPIContext } from "@server/test/support";
 import documentUpdater from "./documentUpdater";
 
@@ -44,6 +44,104 @@ describe("documentUpdater", () => {
     );
 
     expect(document.lastModifiedById).not.toEqual(user.id);
+  });
+
+  it("should hydrate required properties with null values on update", async () => {
+    const user = await buildUser();
+    const collection = await buildCollection({
+      userId: user.id,
+      teamId: user.teamId,
+    });
+    const definition = await PropertyDefinition.create({
+      collectionId: collection.id,
+      teamId: user.teamId,
+      name: "Status",
+      description: null,
+      type: DocumentPropertyType.Text,
+      required: true,
+      createdById: user.id,
+      lastModifiedById: user.id,
+    });
+
+    let document = await buildDocument({
+      teamId: user.teamId,
+      userId: user.id,
+      collectionId: collection.id,
+      properties: {},
+    });
+
+    document = await withAPIContext(user, (ctx) =>
+      documentUpdater(ctx, {
+        document,
+        title: "Hydrated",
+      })
+    );
+
+    expect(document.properties[definition.id]).toEqual({
+      definitionId: definition.id,
+      name: definition.name,
+      type: definition.type,
+      value: null,
+    });
+  });
+
+  it("should upsert document properties across repeated updates", async () => {
+    const user = await buildUser();
+    const collection = await buildCollection({
+      userId: user.id,
+      teamId: user.teamId,
+    });
+    const definition = await PropertyDefinition.create({
+      collectionId: collection.id,
+      teamId: user.teamId,
+      name: "Owner",
+      description: null,
+      type: DocumentPropertyType.Text,
+      required: false,
+      createdById: user.id,
+      lastModifiedById: user.id,
+    });
+
+    let document = await buildDocument({
+      teamId: user.teamId,
+      userId: user.id,
+      collectionId: collection.id,
+      properties: {},
+    });
+
+    document = await withAPIContext(user, (ctx) =>
+      documentUpdater(ctx, {
+        document,
+        properties: {
+          [definition.id]: "Alice",
+        },
+      })
+    );
+
+    document = await withAPIContext(user, (ctx) =>
+      documentUpdater(ctx, {
+        document,
+        properties: {
+          [definition.id]: "Bob",
+        },
+      })
+    );
+
+    const rows = await DocumentProperty.findAll({
+      where: {
+        documentId: document.id,
+        propertyDefinitionId: definition.id,
+      },
+    });
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].value).toEqual("Bob");
+    expect(document.properties[definition.id]).toEqual({
+      definitionId: definition.id,
+      name: definition.name,
+      type: definition.type,
+      value: "Bob",
+    });
   });
 
   it("should update document content when changing text", async () => {

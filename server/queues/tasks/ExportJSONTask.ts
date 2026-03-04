@@ -14,6 +14,7 @@ import { DocumentHelper } from "@server/models/helpers/DocumentHelper";
 import { ProsemirrorHelper } from "@server/models/helpers/ProsemirrorHelper";
 import { presentAttachment, presentCollection } from "@server/presenters";
 import type { CollectionJSONExport, JSONExportMetadata } from "@server/types";
+import { toDocumentPropertyValues } from "@server/utils/documentProperties";
 import ZipHelper from "@server/utils/ZipHelper";
 import { serializeFilename } from "@server/utils/fs";
 import packageJson from "../../../package.json";
@@ -190,11 +191,7 @@ export default class ExportJSONTask extends ExportTask {
           fullWidth: document.fullWidth,
           template: document.template,
           parentDocumentId: document.parentDocumentId,
-          properties: Object.fromEntries(
-            Object.entries(document.properties ?? {}).map(
-              ([propertyId, property]) => [propertyId, property.value]
-            )
-          ),
+          properties: toDocumentPropertyValues(document.properties ?? {}),
         };
 
         if (node.children?.length > 0) {

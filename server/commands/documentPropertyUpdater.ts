@@ -5,10 +5,16 @@ import type {
   JSONValue,
 } from "@shared/types";
 import { Op } from "sequelize";
+import type { Transaction } from "sequelize";
 import { DocumentPropertyType } from "@shared/types";
 import { ValidationError } from "@server/errors";
 import type { APIContext } from "@server/types";
 import { sequelize } from "@server/storage/database";
+import {
+  extractDocumentPropertyValue,
+  toDocumentPropertyValues,
+  type DocumentPropertyLike,
+} from "@server/utils/documentProperties";
 import type { Document, PropertyDefinitionOption } from "@server/models";
 import { DocumentProperty, PropertyDefinition } from "@server/models";
 
@@ -32,7 +38,6 @@ export interface ApplyDocumentPropertyUpdateOptions {
    */
   replace?: boolean;
 }
-
 /**
  * Validates and prepares document property updates.
  *
@@ -56,37 +61,40 @@ export async function prepareDocumentPropertyUpdate(
     ...(document.properties ?? {}),
   };
 
-  if (definitionIds.length === 0) {
-    return {
-      properties: mergedProperties,
-      upserts: [],
-      deletes: [],
-    };
-  }
-
   const collectionId = options?.collectionId ?? document.collectionId;
 
   if (!collectionId) {
+    if (definitionIds.length === 0) {
+      return {
+        properties: mergedProperties,
+        upserts: [],
+        deletes: [],
+      };
+    }
+
     throw ValidationError(
       "collectionId is required to update collection-scoped document properties"
     );
   }
 
   const uniqueDefinitionIds = Array.from(new Set(definitionIds));
-  const definitions = await PropertyDefinition.findAll({
-    where: {
-      id: uniqueDefinitionIds,
-      collectionId,
-      teamId: document.teamId,
-    },
-    include: [
-      {
-        association: "options",
-        required: false,
-      },
-    ],
-    transaction: ctx.state.transaction,
-  });
+  const definitions =
+    uniqueDefinitionIds.length > 0
+      ? await PropertyDefinition.findAll({
+          where: {
+            id: uniqueDefinitionIds,
+            collectionId,
+            teamId: document.teamId,
+          },
+          include: [
+            {
+              association: "options",
+              required: false,
+            },
+          ],
+          transaction: ctx.state.transaction,
+        })
+      : [];
   const definitionById = new Map(definitions.map((d) => [d.id, d]));
   const strict = options?.strict !== false;
 
@@ -113,7 +121,7 @@ export async function prepareDocumentPropertyUpdate(
       }
 
       delete mergedProperties[propertyDefinitionId];
-      deletes.push(propertyDefinitionId);
+      addUnique(deletes, propertyDefinitionId);
       continue;
     }
 
@@ -121,7 +129,7 @@ export async function prepareDocumentPropertyUpdate(
 
     if (normalized === null) {
       delete mergedProperties[propertyDefinitionId];
-      deletes.push(propertyDefinitionId);
+      addUnique(deletes, propertyDefinitionId);
       continue;
     }
 
@@ -133,6 +141,40 @@ export async function prepareDocumentPropertyUpdate(
       propertyDefinitionId,
       value: normalized,
     });
+  }
+
+  const requiredDefinitions = await PropertyDefinition.findAll({
+    where: {
+      collectionId,
+      teamId: document.teamId,
+      required: true,
+    },
+    include: [
+      {
+        association: "options",
+        required: false,
+      },
+    ],
+    transaction: ctx.state.transaction,
+  });
+
+  for (const definition of requiredDefinitions) {
+    const currentSnapshot = mergedProperties[
+      definition.id
+    ] as DocumentPropertyLike;
+    const currentValue = sanitizeStoredPropertyValue(
+      definition,
+      extractDocumentPropertyValue(currentSnapshot)
+    );
+
+    if (currentValue === null) {
+      addUnique(deletes, definition.id);
+    }
+
+    mergedProperties[definition.id] = createPropertySnapshot(
+      definition,
+      currentValue
+    );
   }
 
   return {
@@ -150,54 +192,9 @@ export async function prepareDocumentPropertyUpdate(
  * @returns Normalized input map keyed by property definition ID.
  */
 export function toDocumentPropertyInput(
-  properties: DocumentProperties
+  properties: Record<string, DocumentPropertyLike>
 ): DocumentPropertyInput {
-  return Object.fromEntries(
-    Object.entries(properties).map(([propertyDefinitionId, property]) => [
-      propertyDefinitionId,
-      property.value,
-    ])
-  );
-}
-
-/**
- * Validates that all required property definitions for a collection have
- * non-empty values on the document snapshot.
- *
- * @param ctx The request context.
- * @param document The document being validated.
- * @param options Optional collection override.
- */
-export async function validateRequiredDocumentProperties(
-  ctx: APIContext,
-  document: Document,
-  options?: {
-    collectionId?: string | null;
-  }
-) {
-  const collectionId = options?.collectionId ?? document.collectionId;
-
-  if (!collectionId) {
-    return;
-  }
-
-  const definitions = await PropertyDefinition.findAll({
-    attributes: ["id", "name"],
-    where: {
-      collectionId,
-      teamId: document.teamId,
-      required: true,
-    },
-    transaction: ctx.state.transaction,
-  });
-
-  for (const definition of definitions) {
-    const snapshot = document.properties?.[definition.id];
-
-    if (!snapshot || isEmptyValue(snapshot.value)) {
-      throw ValidationError(`Property "${definition.name}" is required`);
-    }
-  }
+  return toDocumentPropertyValues(properties);
 }
 
 /**
@@ -217,32 +214,19 @@ export async function applyDocumentPropertyUpdate(
   const { transaction } = ctx.state;
   const { user } = ctx.state.auth;
 
-  for (const upsert of plan.upserts) {
-    const existing = await DocumentProperty.findOne({
-      where: {
-        documentId: document.id,
-        propertyDefinitionId: upsert.propertyDefinitionId,
-      },
-      transaction,
-    });
-
-    if (existing) {
-      existing.value = upsert.value;
-      existing.lastModifiedById = user.id;
-      await existing.save({ transaction });
-      continue;
-    }
-
-    await DocumentProperty.create(
-      {
+  if (plan.upserts.length > 0) {
+    await DocumentProperty.bulkCreate(
+      plan.upserts.map((upsert) => ({
         documentId: document.id,
         propertyDefinitionId: upsert.propertyDefinitionId,
         value: upsert.value,
         teamId: document.teamId,
         createdById: user.id,
         lastModifiedById: user.id,
-      },
+      })),
       {
+        updateOnDuplicate: ["value", "lastModifiedById", "updatedAt"],
+        conflictAttributes: ["documentId", "propertyDefinitionId"],
         transaction,
       }
     );
@@ -285,6 +269,33 @@ export async function applyDocumentPropertyUpdate(
 }
 
 /**
+ * Clears all document properties (both the denormalized JSONB snapshot and
+ * normalized rows) for the given document IDs within a transaction.
+ *
+ * @param documentIds - the IDs of the documents to clear.
+ * @param transaction - the active Sequelize transaction.
+ */
+export async function clearDocumentProperties(
+  documentIds: string[],
+  transaction: Transaction
+) {
+  if (documentIds.length === 0) {
+    return;
+  }
+
+  await Promise.all([
+    sequelize.query(
+      `UPDATE documents SET properties = '{}' WHERE id IN (:documentIds)`,
+      { replacements: { documentIds }, transaction }
+    ),
+    DocumentProperty.destroy({
+      where: { documentId: documentIds },
+      transaction,
+    }),
+  ]);
+}
+
+/**
  * Synchronizes all document property snapshots and normalized rows for a
  * property definition after metadata changes (for example renaming a property
  * or modifying selectable options).
@@ -307,26 +318,58 @@ export async function syncDocumentPropertiesForDefinition(
     transaction,
   });
 
+  const rowsToDelete: string[] = [];
+  const rowsToUpsert: Array<{
+    id: string;
+    documentId: string;
+    propertyDefinitionId: string;
+    value: JSONValue;
+    teamId: string;
+    createdById: string;
+    lastModifiedById: string;
+  }> = [];
   const snapshotsByDocumentId = new Map<string, DocumentPropertySnapshot>();
 
   for (const row of rows) {
     const normalized = sanitizeStoredPropertyValue(definition, row.value);
 
     if (normalized === null) {
-      await row.destroy({ transaction });
+      rowsToDelete.push(row.id);
       continue;
     }
 
     if (!isSameJSONValue(row.value, normalized)) {
-      row.value = normalized;
-      row.lastModifiedById = user.id;
-      await row.save({ transaction });
+      rowsToUpsert.push({
+        id: row.id,
+        documentId: row.documentId,
+        propertyDefinitionId: row.propertyDefinitionId,
+        value: normalized,
+        teamId: row.teamId,
+        createdById: row.createdById,
+        lastModifiedById: user.id,
+      });
     }
 
     snapshotsByDocumentId.set(
       row.documentId,
       createPropertySnapshot(definition, normalized)
     );
+  }
+
+  if (rowsToDelete.length > 0) {
+    await DocumentProperty.destroy({
+      where: {
+        id: rowsToDelete,
+      },
+      transaction,
+    });
+  }
+
+  if (rowsToUpsert.length > 0) {
+    await DocumentProperty.bulkCreate(rowsToUpsert, {
+      updateOnDuplicate: ["value", "lastModifiedById", "updatedAt"],
+      transaction,
+    });
   }
 
   await sequelize.query(
@@ -343,44 +386,66 @@ export async function syncDocumentPropertiesForDefinition(
     }
   );
 
-  for (const [documentId, snapshot] of snapshotsByDocumentId) {
+  await applyPropertySnapshotsToDocuments({
+    collectionId: definition.collectionId,
+    propertyDefinitionId: definition.id,
+    snapshots: Array.from(snapshotsByDocumentId.entries()),
+    transaction,
+  });
+}
+
+async function applyPropertySnapshotsToDocuments({
+  collectionId,
+  propertyDefinitionId,
+  snapshots,
+  transaction,
+}: {
+  collectionId: string;
+  propertyDefinitionId: string;
+  snapshots: [string, DocumentPropertySnapshot][];
+  transaction: Transaction;
+}) {
+  if (snapshots.length === 0) {
+    return;
+  }
+
+  const chunkSize = 200;
+
+  for (let i = 0; i < snapshots.length; i += chunkSize) {
+    const chunk = snapshots.slice(i, i + chunkSize);
+    const replacements: Record<string, string> = {
+      collectionId,
+      propertyDefinitionId,
+    };
+    const values = chunk
+      .map(([documentId, snapshot], index) => {
+        const documentKey = `documentId${index}`;
+        const snapshotKey = `snapshot${index}`;
+
+        replacements[documentKey] = documentId;
+        replacements[snapshotKey] = JSON.stringify(snapshot);
+
+        return `(CAST(:${documentKey} AS uuid), CAST(:${snapshotKey} AS jsonb))`;
+      })
+      .join(", ");
+
     await sequelize.query(
-      `UPDATE documents
+      `UPDATE documents AS d
        SET properties = jsonb_set(
-         COALESCE(properties, '{}'::jsonb),
+         COALESCE(d.properties, '{}'::jsonb),
          ARRAY[:propertyDefinitionId]::text[],
-         CAST(:snapshot AS jsonb),
+         source.snapshot,
          true
        )
-       WHERE id = :documentId
-         AND "collectionId" = :collectionId`,
+       FROM (VALUES ${values}) AS source(document_id, snapshot)
+       WHERE d.id = source.document_id
+         AND d."collectionId" = :collectionId`,
       {
-        replacements: {
-          collectionId: definition.collectionId,
-          documentId,
-          propertyDefinitionId: definition.id,
-          snapshot: JSON.stringify(snapshot),
-        },
+        replacements,
         transaction,
       }
     );
   }
-}
-
-function isEmptyValue(value: JSONValue | null | undefined): boolean {
-  if (value === null || value === undefined) {
-    return true;
-  }
-
-  if (typeof value === "string") {
-    return value.length === 0;
-  }
-
-  if (Array.isArray(value)) {
-    return value.length === 0;
-  }
-
-  return false;
 }
 
 function sanitizeStoredPropertyValue(
@@ -516,6 +581,12 @@ function normalizePropertyValue(
 
     default:
       throw ValidationError(`Unsupported property type "${definition.type}"`);
+  }
+}
+
+function addUnique(items: string[], value: string) {
+  if (!items.includes(value)) {
+    items.push(value);
   }
 }
 

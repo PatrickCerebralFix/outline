@@ -12,10 +12,10 @@ import type {
   SortFilter as TSortFilter,
   DirectionFilter as TDirectionFilter,
   DateFilter as TDateFilter,
-  DocumentPropertyType as TDocumentPropertyType,
 } from "@shared/types";
 import {
   DocumentPropertyFilterOperator as TDocumentPropertyFilterOperator,
+  DocumentPropertyType as TDocumentPropertyType,
   StatusFilter as TStatusFilter,
 } from "@shared/types";
 import ArrowKeyNavigation from "~/components/ArrowKeyNavigation";
@@ -40,7 +40,10 @@ import CollectionFilter from "./components/CollectionFilter";
 import DateFilter from "./components/DateFilter";
 import { DocumentFilter } from "./components/DocumentFilter";
 import DocumentTypeFilter from "./components/DocumentTypeFilter";
-import type { PropertyFilterState } from "./components/PropertyFilter";
+import {
+  noValueOperators,
+  type PropertyFilterState,
+} from "./components/PropertyFilter";
 import { PropertyFiltersSection } from "./components/PropertyFiltersSection";
 import RecentSearches from "./components/RecentSearches";
 import SearchInput from "./components/SearchInput";
@@ -51,11 +54,6 @@ import { HStack } from "~/components/primitives/HStack";
 // ---------------------------------------------------------------------------
 // URL serialization helpers
 // ---------------------------------------------------------------------------
-
-const noValueOperators = new Set([
-  TDocumentPropertyFilterOperator.IsEmpty,
-  TDocumentPropertyFilterOperator.IsNotEmpty,
-]);
 
 const arrayOperators = new Set([
   TDocumentPropertyFilterOperator.Between,
@@ -140,7 +138,7 @@ function serializePropertyFiltersToUrl(
     return undefined;
   }
 
-  const compact = filters.map((f) => ({
+  const compact = meaningful.map((f) => ({
     ...(f.propertyName ? { name: f.propertyName } : {}),
     ...(f.propertyType ? { type: f.propertyType } : {}),
     op: f.operator,
@@ -172,7 +170,7 @@ function parsePropertyFilterValue(
   }
 
   if (
-    propertyType === ("number" as TDocumentPropertyType) &&
+    propertyType === TDocumentPropertyType.Number &&
     Number.isFinite(Number(raw))
   ) {
     return Number(raw);

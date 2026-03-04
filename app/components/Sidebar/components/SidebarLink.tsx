@@ -145,6 +145,11 @@ function SidebarLink(
     [onDisclosureClick, hasDisclosure]
   );
 
+  const linkActionProps = React.useMemo(
+    () => (to ? { onActiveClick: handleDisclosureClick } : {}),
+    [to, handleDisclosureClick]
+  );
+
   const DisclosureComponent = icon ? HiddenDisclosure : Disclosure;
 
   return (
@@ -155,7 +160,6 @@ function SidebarLink(
       style={style}
       activeStyle={isActiveDrop ? activeDropStyle : activeStyle}
       onClick={handleClick}
-      onActiveClick={handleDisclosureClick}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
       onDragEnter={handleMouseEnter}
@@ -166,6 +170,7 @@ function SidebarLink(
       href={href}
       className={className}
       ref={ref}
+      {...linkActionProps}
       {...rest}
     >
       <ContextMenu action={contextAction} ariaLabel={t("Link options")}>
@@ -183,7 +188,7 @@ function SidebarLink(
           {unreadBadge && <UnreadBadge style={unreadStyle} />}
         </Content>
       </ContextMenu>
-      {menu && <Actions showActions={showActions}>{menu}</Actions>}
+      {menu && <Actions $showActions={showActions}>{menu}</Actions>}
     </Link>
   );
 }
@@ -205,9 +210,9 @@ const Content = styled.span`
   min-width: 0;
 `;
 
-const Actions = styled(EventBoundary)<{ showActions?: boolean }>`
+const Actions = styled(EventBoundary)<{ $showActions?: boolean }>`
   display: inline-flex;
-  visibility: ${(props) => (props.showActions ? "visible" : "hidden")};
+  visibility: ${(props) => (props.$showActions ? "visible" : "hidden")};
   position: absolute;
   top: 3px;
   right: 4px;

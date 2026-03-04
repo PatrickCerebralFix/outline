@@ -27,6 +27,18 @@ export default class PropertyDefinitionsStore extends Store<PropertyDefinition> 
     invariant(res?.data, "Property definitions list not available");
 
     return runInAction("PropertyDefinitionsStore#fetchDefinitions", () => {
+      if (collectionId) {
+        const incomingIds = new Set(
+          (res.data as Array<{ id: string }>).map((item) => item.id)
+        );
+
+        this.forCollection(collectionId).forEach((definition) => {
+          if (!incomingIds.has(definition.id)) {
+            this.remove(definition.id);
+          }
+        });
+      }
+
       res.data.forEach(this.add);
       this.addPolicies(res.policies);
       return res.data.map((item: { id: string }) => this.get(item.id)!);

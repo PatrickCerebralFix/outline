@@ -1019,13 +1019,11 @@ export default class SearchHelper {
           );
         }
 
-        const escapedValues = value.map((v) => sequelize.escape(String(v)));
+        const valueStrings = value.map((v) => String(v));
+        const escapedValues = valueStrings.map((v) => sequelize.escape(v));
         const arrayLiteral = `ARRAY[${escapedValues.join(",")}]`;
-        const optionValueCondition = `EXISTS (
-          SELECT 1
-          FROM jsonb_array_elements(COALESCE(prop.value -> 'options', '[]'::jsonb)) AS option_item(option)
-          WHERE lower(option_item.option ->> 'value') = ANY(ARRAY[${value.map((v) => `lower(${sequelize.escape(String(v))})`).join(",")}])
-        )`;
+        const optionValueCondition =
+          this.buildSelectedOptionValuesAnyMatchExpression(valueStrings);
 
         return Sequelize.where(
           Sequelize.literal(
@@ -1048,7 +1046,13 @@ export default class SearchHelper {
           );
         }
 
+        const valueStrings = value.map((v) => String(v));
         const containsExpr = this.toJSONBExpression(value);
+        const optionValueCondition =
+          this.buildSelectedOptionValuesAllMatchExpression(valueStrings);
+        const includesAllCondition = optionValueCondition
+          ? `(${propertyValueExpr} @> ${containsExpr} OR ${optionValueCondition})`
+          : `${propertyValueExpr} @> ${containsExpr}`;
 
         return Sequelize.where(
           Sequelize.literal(
@@ -1056,7 +1060,7 @@ export default class SearchHelper {
               SELECT 1
               FROM jsonb_each(${propertiesExpr}) AS prop(key, value)
               WHERE ${baseMatch}
-                AND ${propertyValueExpr} @> ${containsExpr}
+                AND ${includesAllCondition}
             )`
           ),
           Op.eq,
@@ -1071,13 +1075,11 @@ export default class SearchHelper {
           );
         }
 
-        const escapedValues = value.map((v) => sequelize.escape(String(v)));
+        const valueStrings = value.map((v) => String(v));
+        const escapedValues = valueStrings.map((v) => sequelize.escape(v));
         const arrayLiteral = `ARRAY[${escapedValues.join(",")}]`;
-        const optionValueCondition = `EXISTS (
-          SELECT 1
-          FROM jsonb_array_elements(COALESCE(prop.value -> 'options', '[]'::jsonb)) AS option_item(option)
-          WHERE lower(option_item.option ->> 'value') = ANY(ARRAY[${value.map((v) => `lower(${sequelize.escape(String(v))})`).join(",")}])
-        )`;
+        const optionValueCondition =
+          this.buildSelectedOptionValuesAnyMatchExpression(valueStrings);
 
         return Sequelize.where(
           Sequelize.literal(
@@ -1144,15 +1146,21 @@ export default class SearchHelper {
           );
         }
 
-        return {
-          properties: {
-            [Op.contains]: {
-              [propertyDefinitionId]: {
-                value: Array.isArray(value) ? value : [value],
-              },
-            },
-          },
-        } as WhereOptions<Document>;
+        const containsExpr = this.toJSONBExpression(
+          Array.isArray(value) ? value : [value]
+        );
+        const scalarExpr = Array.isArray(value)
+          ? undefined
+          : this.toJSONBExpression(value);
+        const containsCondition = scalarExpr
+          ? `(${propertyValueExpr} = ${scalarExpr} OR ${propertyValueExpr} @> ${containsExpr})`
+          : `${propertyValueExpr} @> ${containsExpr}`;
+
+        return Sequelize.where(
+          Sequelize.literal(containsCondition),
+          Op.eq,
+          true
+        ) as WhereOptions<Document>;
       }
 
       case DocumentPropertyFilterOperator.IsEmpty:
@@ -1323,6 +1331,46 @@ export default class SearchHelper {
       SELECT 1
       FROM jsonb_array_elements(COALESCE(prop.value -> 'options', '[]'::jsonb)) AS option_item(option)
       WHERE lower(option_item.option ->> 'value') = lower(${escapedValue})
+    )`;
+  }
+
+  private static buildSelectedOptionValuesAnyMatchExpression(values: string[]) {
+    if (values.length === 0) {
+      return null;
+    }
+
+    const escapedValues = values.map((value) =>
+      `lower(${sequelize.escape(value)})`
+    );
+
+    return `EXISTS (
+      SELECT 1
+      FROM jsonb_array_elements(COALESCE(prop.value -> 'options', '[]'::jsonb)) AS option_item(option)
+      WHERE lower(option_item.option ->> 'value') = ANY(ARRAY[${escapedValues.join(",")}])
+    )`;
+  }
+
+  private static buildSelectedOptionValuesAllMatchExpression(values: string[]) {
+    const normalizedValues = Array.from(
+      new Set(values.map((value) => value.trim()).filter(Boolean))
+    );
+
+    if (normalizedValues.length === 0) {
+      return null;
+    }
+
+    const escapedValues = normalizedValues.map((value) =>
+      `lower(${sequelize.escape(value)})`
+    );
+
+    return `NOT EXISTS (
+      SELECT 1
+      FROM unnest(ARRAY[${escapedValues.join(",")}]) AS requested(option_value)
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM jsonb_array_elements(COALESCE(prop.value -> 'options', '[]'::jsonb)) AS option_item(option)
+        WHERE lower(option_item.option ->> 'value') = requested.option_value
+      )
     )`;
   }
 

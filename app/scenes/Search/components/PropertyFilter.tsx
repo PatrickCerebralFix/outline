@@ -49,7 +49,7 @@ type OperatorOption = {
   label: string;
 };
 
-const noValueOperators = new Set([
+export const noValueOperators = new Set([
   DocumentPropertyFilterOperator.IsEmpty,
   DocumentPropertyFilterOperator.IsNotEmpty,
 ]);

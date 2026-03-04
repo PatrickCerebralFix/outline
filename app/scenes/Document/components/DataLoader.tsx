@@ -1,7 +1,6 @@
 import { observer } from "mobx-react";
 import * as React from "react";
 import type { RouteComponentProps, StaticContext } from "react-router";
-import { useLocation } from "react-router";
 import { TeamPreference } from "@shared/types";
 import { ProsemirrorHelper } from "@shared/utils/ProsemirrorHelper";
 import { RevisionHelper } from "@shared/utils/RevisionHelper";
@@ -42,6 +41,7 @@ type LocationState = {
   title?: string;
   restore?: boolean;
   revisionId?: string;
+  sidebarContext?: string;
 };
 
 type Children = (options: {
@@ -59,7 +59,7 @@ type Props = RouteComponentProps<Params, StaticContext, LocationState> & {
   children: Children;
 };
 
-function DataLoader({ match, children }: Props) {
+function DataLoader({ match, children, location }: Props) {
   const { ui, views, shares, comments, documents, revisions } = useStores();
   const team = useCurrentTeam();
   const user = useCurrentUser();
@@ -86,21 +86,22 @@ function DataLoader({ match, children }: Props) {
     match.path === matchDocumentEdit || match.path.startsWith(settingsPath());
   const isEditing = isEditRoute || !user?.separateEditMode;
   const can = usePolicy(document);
-  const location = useLocation<LocationState>();
   const missingPolicy = !can || Object.keys(can).length === 0;
+  const isDirectOpen = !location.state?.sidebarContext;
+  const shouldForceDocumentFetch = missingPolicy || isDirectOpen;
 
   React.useEffect(() => {
     async function fetchDocument() {
       try {
         await documents.fetch(documentSlug, {
-          force: missingPolicy,
+          force: shouldForceDocumentFetch,
         });
       } catch (err) {
         setError(err);
       }
     }
     void fetchDocument();
-  }, [ui, documents, missingPolicy, documentSlug]);
+  }, [ui, documents, documentSlug, shouldForceDocumentFetch]);
 
   React.useEffect(() => {
     async function fetchRevision() {

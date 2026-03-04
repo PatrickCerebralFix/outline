@@ -413,6 +413,67 @@ describe("SearchHelper", () => {
       expect(results[0].document.id).toBe(unityDocument.id);
     });
 
+    it("should filter by property definition ID with Contains for scalar values", async () => {
+      const team = await buildTeam();
+      const user = await buildUser({ teamId: team.id });
+      const collection = await buildCollection({
+        teamId: team.id,
+        userId: user.id,
+      });
+      const definition = await PropertyDefinition.create({
+        name: "Engine",
+        description: null,
+        type: DocumentPropertyType.Text,
+        required: false,
+        collectionId: collection.id,
+        teamId: team.id,
+        createdById: user.id,
+        lastModifiedById: user.id,
+      });
+      const unityDocument = await buildDocument({
+        teamId: team.id,
+        userId: user.id,
+        collectionId: collection.id,
+      });
+      const unrealDocument = await buildDocument({
+        teamId: team.id,
+        userId: user.id,
+        collectionId: collection.id,
+      });
+
+      unityDocument.properties = {
+        [definition.id]: {
+          definitionId: definition.id,
+          name: definition.name,
+          type: definition.type,
+          value: "Unity",
+        },
+      };
+      unrealDocument.properties = {
+        [definition.id]: {
+          definitionId: definition.id,
+          name: definition.name,
+          type: definition.type,
+          value: "Unreal",
+        },
+      };
+      await unityDocument.save();
+      await unrealDocument.save();
+
+      const { results } = await SearchHelper.searchForUser(user, {
+        propertyFilters: [
+          {
+            propertyDefinitionId: definition.id,
+            operator: DocumentPropertyFilterOperator.Contains,
+            value: "Unity",
+          },
+        ],
+      });
+
+      expect(results.length).toBe(1);
+      expect(results[0].document.id).toBe(unityDocument.id);
+    });
+
     it("should filter by semantic property name across collections", async () => {
       const team = await buildTeam();
       const user = await buildUser({ teamId: team.id });
@@ -1172,6 +1233,155 @@ describe("SearchHelper", () => {
 
       expect(results.length).toBe(1);
       expect(results[0].document.id).toBe(docA.id);
+    });
+
+    it("should filter semantic multiselect with IncludesAll by option values", async () => {
+      const team = await buildTeam();
+      const user = await buildUser({ teamId: team.id });
+      const collectionA = await buildCollection({
+        teamId: team.id,
+        userId: user.id,
+      });
+      const collectionB = await buildCollection({
+        teamId: team.id,
+        userId: user.id,
+      });
+
+      const definitionA = await PropertyDefinition.create({
+        name: "Tags",
+        description: null,
+        type: DocumentPropertyType.MultiSelect,
+        required: false,
+        collectionId: collectionA.id,
+        teamId: team.id,
+        createdById: user.id,
+        lastModifiedById: user.id,
+      });
+      const definitionB = await PropertyDefinition.create({
+        name: "Tags",
+        description: null,
+        type: DocumentPropertyType.MultiSelect,
+        required: false,
+        collectionId: collectionB.id,
+        teamId: team.id,
+        createdById: user.id,
+        lastModifiedById: user.id,
+      });
+
+      const actionA = await PropertyDefinitionOption.create({
+        propertyDefinitionId: definitionA.id,
+        teamId: team.id,
+        label: "Action",
+        value: "Action",
+        color: "#AA0000",
+        index: "0",
+        createdById: user.id,
+        lastModifiedById: user.id,
+      });
+      const puzzleA = await PropertyDefinitionOption.create({
+        propertyDefinitionId: definitionA.id,
+        teamId: team.id,
+        label: "Puzzle",
+        value: "Puzzle",
+        color: "#00AA00",
+        index: "1",
+        createdById: user.id,
+        lastModifiedById: user.id,
+      });
+      const actionB = await PropertyDefinitionOption.create({
+        propertyDefinitionId: definitionB.id,
+        teamId: team.id,
+        label: "Action",
+        value: "Action",
+        color: "#0000AA",
+        index: "0",
+        createdById: user.id,
+        lastModifiedById: user.id,
+      });
+
+      const docWithAll = await buildDocument({
+        teamId: team.id,
+        userId: user.id,
+        collectionId: collectionA.id,
+      });
+      const docWithOne = await buildDocument({
+        teamId: team.id,
+        userId: user.id,
+        collectionId: collectionA.id,
+      });
+      const docInOtherCollection = await buildDocument({
+        teamId: team.id,
+        userId: user.id,
+        collectionId: collectionB.id,
+      });
+
+      docWithAll.properties = {
+        [definitionA.id]: {
+          definitionId: definitionA.id,
+          name: definitionA.name,
+          type: definitionA.type,
+          value: [actionA.id, puzzleA.id],
+          options: [
+            {
+              id: actionA.id,
+              value: actionA.value,
+              color: actionA.color,
+            },
+            {
+              id: puzzleA.id,
+              value: puzzleA.value,
+              color: puzzleA.color,
+            },
+          ],
+        },
+      };
+      docWithOne.properties = {
+        [definitionA.id]: {
+          definitionId: definitionA.id,
+          name: definitionA.name,
+          type: definitionA.type,
+          value: [actionA.id],
+          options: [
+            {
+              id: actionA.id,
+              value: actionA.value,
+              color: actionA.color,
+            },
+          ],
+        },
+      };
+      docInOtherCollection.properties = {
+        [definitionB.id]: {
+          definitionId: definitionB.id,
+          name: definitionB.name,
+          type: definitionB.type,
+          value: [actionB.id],
+          options: [
+            {
+              id: actionB.id,
+              value: actionB.value,
+              color: actionB.color,
+            },
+          ],
+        },
+      };
+      await docWithAll.save();
+      await docWithOne.save();
+      await docInOtherCollection.save();
+
+      const { results } = await SearchHelper.searchForUser(user, {
+        propertyFilters: [
+          {
+            propertyName: "Tags",
+            propertyType: DocumentPropertyType.MultiSelect,
+            operator: DocumentPropertyFilterOperator.IncludesAll,
+            value: ["Action", "Puzzle"],
+          },
+        ],
+      });
+
+      expect(results.length).toBe(1);
+      expect(results[0].document.id).toBe(docWithAll.id);
     });
 
     it("should filter by multiselect property with Excludes", async () => {

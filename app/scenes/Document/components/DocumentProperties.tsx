@@ -1,4 +1,5 @@
 import debounce from "lodash/debounce";
+import { toJS } from "mobx";
 import { observer } from "mobx-react";
 import { transparentize } from "polished";
 import { CloseIcon, PlusIcon } from "outline-icons";
@@ -36,8 +37,43 @@ type Props = {
   readOnly?: boolean;
 };
 
+interface LegacyDocumentPropertySnapshot {
+  definitionId?: string;
+  value?: DocumentPropertyValues[string];
+}
+
 function isDocumentPropertyType(value: string): value is DocumentPropertyType {
   return Object.values(DocumentPropertyType).some((type) => type === value);
+}
+
+/**
+ * Normalize a property payload into its primitive value.
+ *
+ * Supports both current payload shape (`{ [id]: value }`) and legacy shape
+ * (`{ [id]: { value, ...metadata } }`).
+ */
+function toPropertyValue(
+  value: DocumentPropertyValues[string] | LegacyDocumentPropertySnapshot
+): DocumentPropertyValues[string] {
+  if (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    "value" in value
+  ) {
+    return value.value ?? null;
+  }
+
+  return value as DocumentPropertyValues[string];
+}
+
+function isEmptyPropertyValue(value: DocumentPropertyValues[string]) {
+  return (
+    value === null ||
+    value === undefined ||
+    value === "" ||
+    (Array.isArray(value) && value.length === 0)
+  );
 }
 
 /** Friendly display labels for property types. */
@@ -66,14 +102,43 @@ export const DocumentProperties = observer(function DocumentProperties({
   const { propertyDefinitions } = useStores();
   const collectionId = document.collectionId;
   const [isLoading, setIsLoading] = useState(!!collectionId);
-  const [values, setValues] = useState<DocumentPropertyValues>(
-    document.properties ?? {}
+
+  // Read values directly from the MobX observable so the component
+  // re-renders whenever properties change (API fetch, WebSocket, etc.).
+  const rawValues = toJS(document.properties ?? {}) as DocumentPropertyValues;
+  const values = Object.fromEntries(
+    Object.entries(rawValues).map(([rawKey, rawValue]) => {
+      const snapshot =
+        rawValue as
+          | DocumentPropertyValues[string]
+          | LegacyDocumentPropertySnapshot;
+      const definitionId =
+        typeof snapshot === "object" &&
+        snapshot !== null &&
+        !Array.isArray(snapshot) &&
+        typeof snapshot.definitionId === "string" &&
+        snapshot.definitionId.length > 0
+          ? snapshot.definitionId
+          : rawKey;
+
+      return [definitionId, toPropertyValue(snapshot)];
+    })
+  ) as DocumentPropertyValues;
+
+  // Tracks definition IDs that the user manually added via the picker
+  // but that don't yet have a persisted value on the document.
+  const [manuallyAddedIds, setManuallyAddedIds] = useState<Set<string>>(
+    () => new Set<string>()
   );
 
-  // Tracks which definition IDs are actively shown as property rows.
-  const [addedDefinitionIds, setAddedDefinitionIds] = useState<Set<string>>(
-    () => new Set(Object.keys(document.properties ?? {}))
-  );
+  // The full set of shown definition IDs: those with values + manually added.
+  const addedDefinitionIds = useMemo(() => {
+    const ids = new Set(Object.keys(values));
+    for (const id of manuallyAddedIds) {
+      ids.add(id);
+    }
+    return ids;
+  }, [values, manuallyAddedIds]);
 
   // "Add property" popover state.
   const [addPickerOpen, setAddPickerOpen] = useState(false);
@@ -86,12 +151,12 @@ export const DocumentProperties = observer(function DocumentProperties({
   );
   const [inlineOptions, setInlineOptions] = useState<string[]>([]);
   const [isSaving, setIsSaving] = useState(false);
+  const hasInitializedVisibleDefinitions = useRef(false);
 
+  // Reset manually-added IDs when navigating to a different document.
   useEffect(() => {
-    setValues(document.properties ?? {});
-    setAddedDefinitionIds(
-      new Set(Object.keys(document.properties ?? {}))
-    );
+    setManuallyAddedIds(new Set());
+    hasInitializedVisibleDefinitions.current = false;
   }, [document.id]);
 
   useEffect(() => {
@@ -120,7 +185,7 @@ export const DocumentProperties = observer(function DocumentProperties({
     return () => {
       cancelled = true;
     };
-  }, [collectionId, propertyDefinitions]);
+  }, [collectionId, document.id, propertyDefinitions]);
 
   const definitions = collectionId
     ? propertyDefinitions
@@ -129,15 +194,35 @@ export const DocumentProperties = observer(function DocumentProperties({
     : [];
 
   useEffect(() => {
+    if (readOnly) {
+      return;
+    }
+
+    if (hasInitializedVisibleDefinitions.current) {
+      return;
+    }
+
+    if (isLoading || definitions.length === 0) {
+      return;
+    }
+
+    hasInitializedVisibleDefinitions.current = true;
+    const requiredDefinitionIds = definitions
+      .filter((definition) => definition.required)
+      .map((definition) => definition.id);
+    setManuallyAddedIds(new Set(requiredDefinitionIds));
+  }, [definitions, isLoading, readOnly]);
+
+  useEffect(() => {
     const requiredIds = definitions
       .filter((d) => d.required)
       .map((d) => d.id);
     if (requiredIds.length > 0) {
-      setAddedDefinitionIds((prev) => {
+      setManuallyAddedIds((prev) => {
         const next = new Set(prev);
         let changed = false;
         for (const id of requiredIds) {
-          if (!next.has(id)) {
+          if (!next.has(id) && isEmptyPropertyValue(values[id])) {
             next.add(id);
             changed = true;
           }
@@ -145,7 +230,7 @@ export const DocumentProperties = observer(function DocumentProperties({
         return changed ? next : prev;
       });
     }
-  }, [definitions]);
+  }, [definitions, values]);
 
   const assignedDefinitions = definitions.filter((d) =>
     addedDefinitionIds.has(d.id)
@@ -218,34 +303,26 @@ export const DocumentProperties = observer(function DocumentProperties({
         return;
       }
 
-      setValues((current) => {
-        const nextValues = {
-          ...current,
-        };
+      const nextValues = {
+        ...values,
+      };
 
-        const isEmptyValue =
-          value === null ||
-          value === undefined ||
-          value === "" ||
-          (Array.isArray(value) && value.length === 0);
+      if (isEmptyPropertyValue(value)) {
+        delete nextValues[propertyDefinitionId];
+      } else {
+        nextValues[propertyDefinitionId] = value;
+      }
 
-        if (isEmptyValue) {
-          delete nextValues[propertyDefinitionId];
-        } else {
-          nextValues[propertyDefinitionId] = value;
-        }
+      document.properties = nextValues;
 
-        document.properties = nextValues;
-        saveProperties(nextValues);
-        return nextValues;
-      });
+      saveProperties(nextValues);
     },
-    [document, readOnly, saveProperties]
+    [document, readOnly, saveProperties, values]
   );
 
   const handleRemoveProperty = useCallback(
     (definitionId: string) => {
-      setAddedDefinitionIds((prev) => {
+      setManuallyAddedIds((prev) => {
         const next = new Set(prev);
         next.delete(definitionId);
         return next;
@@ -256,7 +333,7 @@ export const DocumentProperties = observer(function DocumentProperties({
   );
 
   const handleAddDefinition = useCallback((definitionId: string) => {
-    setAddedDefinitionIds((prev) => new Set(prev).add(definitionId));
+    setManuallyAddedIds((prev) => new Set(prev).add(definitionId));
     setAddPickerOpen(false);
   }, []);
 
@@ -301,7 +378,7 @@ export const DocumentProperties = observer(function DocumentProperties({
 
       const newId = res.data?.id as string | undefined;
       if (newId) {
-        setAddedDefinitionIds((prev) => new Set(prev).add(newId));
+        setManuallyAddedIds((prev) => new Set(prev).add(newId));
       }
 
       resetInlineForm();
@@ -334,7 +411,7 @@ export const DocumentProperties = observer(function DocumentProperties({
   }
 
   // In read-only mode, hide if no properties are assigned.
-  if (readOnly && assignedDefinitions.length === 0) {
+  if (readOnly && !isLoading && assignedDefinitions.length === 0) {
     return null;
   }
 

@@ -7,7 +7,6 @@ import {
   applyDocumentPropertyUpdate,
   prepareDocumentPropertyUpdate,
   type DocumentPropertyInput,
-  validateRequiredDocumentProperties,
 } from "./documentPropertyUpdater";
 
 type Props = {
@@ -104,22 +103,19 @@ export default async function documentUpdater(
       editMode
     );
   }
-  if (properties !== undefined) {
+  const propertiesToApply = properties ?? {};
+
+  if (cId || properties !== undefined) {
     propertyUpdatePlan = await prepareDocumentPropertyUpdate(
       ctx,
       document,
-      properties,
+      propertiesToApply,
       {
         collectionId: cId,
+        strict: properties !== undefined,
       }
     );
     document.properties = propertyUpdatePlan.properties;
-  }
-
-  if ((document.publishedAt || publish) && cId) {
-    await validateRequiredDocumentProperties(ctx, document, {
-      collectionId: cId,
-    });
   }
 
   const changed = document.changed();

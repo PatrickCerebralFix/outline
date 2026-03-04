@@ -1,6 +1,7 @@
 import type { Context, Next } from "koa";
 import Router from "koa-router";
 import { randomString } from "@shared/random";
+import { UserRole } from "@shared/types";
 import type { Invite } from "@server/commands/userInviter";
 import userInviter from "@server/commands/userInviter";
 import env from "@server/env";
@@ -38,8 +39,8 @@ router.post(
         return {
           email: `${rando}@example.com`,
           name: `${rando.slice(0, 5)} Tester`,
-          role: "member",
-        } as Invite;
+          role: UserRole.Member,
+        };
       });
 
     Logger.info("utils", `Creating ${count} test users`, invites);
@@ -55,6 +56,36 @@ router.post(
     ctx.body = {
       data: {
         users: response.users.map((user) => presentUser(user)),
+      },
+    };
+  }
+);
+
+router.post(
+  "developer.create_test_user",
+  dev(),
+  auth(),
+  validate(T.CreateTestUserSchema),
+  async (ctx: APIContext<T.CreateTestUserReq>) => {
+    const rando = randomString(10);
+    const invites: Invite[] = [
+      {
+        email: `${rando}@example.com`,
+        name: `${rando.slice(0, 5)} Tester`,
+        role: UserRole.Member,
+      },
+    ];
+
+    const response = await userInviter(ctx, { invites });
+    const newUser = response.users[0];
+    await newUser.updateActiveAt(ctx, true);
+
+    const signinUrl = `${env.URL}/auth/email.callback?token=${newUser.getEmailSigninToken(ctx)}`;
+
+    ctx.body = {
+      data: {
+        user: presentUser(newUser),
+        signinUrl,
       },
     };
   }

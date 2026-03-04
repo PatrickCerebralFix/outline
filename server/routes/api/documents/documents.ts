@@ -1309,12 +1309,7 @@ router.post(
 
     const templateProperties =
       collectionId && original.properties
-        ? Object.fromEntries(
-            Object.entries(original.properties).map(([id, property]) => [
-              id,
-              property.value,
-            ])
-          )
+        ? toDocumentPropertyInput(original.properties)
         : undefined;
 
     const document = await documentCreator(ctx, {

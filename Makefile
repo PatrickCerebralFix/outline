@@ -2,6 +2,7 @@ up:
 	docker compose up -d redis postgres
 	yarn install-local-ssl
 	yarn install --immutable
+	NODE_ENV=development yarn db:migrate
 	yarn dev:watch
 
 build:

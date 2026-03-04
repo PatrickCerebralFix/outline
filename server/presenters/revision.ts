@@ -2,6 +2,7 @@ import parseTitle from "@shared/utils/parseTitle";
 import { traceFunction } from "@server/logging/tracing";
 import type { Revision } from "@server/models";
 import { DocumentHelper } from "@server/models/helpers/DocumentHelper";
+import { toDocumentPropertyValues } from "@server/utils/documentProperties";
 import presentUser from "./user";
 
 async function presentRevision(revision: Revision, html?: string) {
@@ -16,12 +17,7 @@ async function presentRevision(revision: Revision, html?: string) {
     data: await DocumentHelper.toJSON(revision),
     icon: revision.icon ?? emoji,
     color: revision.color,
-    properties: Object.fromEntries(
-      Object.entries(revision.properties ?? {}).map(([id, property]) => [
-        id,
-        property.value,
-      ])
-    ),
+    properties: toDocumentPropertyValues(revision.properties ?? {}),
     collaborators: (await revision.collaborators).map((user) =>
       presentUser(user)
     ),

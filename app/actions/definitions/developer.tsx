@@ -161,6 +161,20 @@ export const createTestUsers = createAction({
   },
 });
 
+export const openAsTestUser = createAction({
+  name: "Open as new test user",
+  icon: <UserIcon />,
+  keywords: "multiplayer second account",
+  section: DeveloperSection,
+  visible: () => env.ENVIRONMENT === "development",
+  perform: async () => {
+    const res = await client.post("/developer.create_test_user");
+    const { signinUrl, user } = res.data;
+    window.open(signinUrl, "_blank");
+    toast.message(`Opened as ${user.name} in new tab`);
+  },
+});
+
 export const createToast = createAction({
   name: "Create toast",
   section: DeveloperSection,
@@ -239,6 +253,7 @@ export const developer = createActionWithChildren({
     toggleFeatureFlag,
     createToast,
     createTestUsers,
+    openAsTestUser,
     clearIndexedDB,
     clearStorage,
     startTyping,

@@ -43,6 +43,11 @@ export default class Document extends ArchivableModel implements Searchable {
   constructor(fields: Record<string, any>, store: DocumentsStore) {
     super(fields, store);
 
+    this.properties =
+      typeof fields.properties === "object" && fields.properties !== null
+        ? fields.properties
+        : {};
+
     this.embedsDisabled = Storage.get(`embedsDisabled-${this.id}`) ?? false;
 
     autorun(() => {
@@ -69,7 +74,7 @@ export default class Document extends ArchivableModel implements Searchable {
 
   @Field
   @observable.shallow
-  properties: DocumentPropertyValues = {};
+  properties: DocumentPropertyValues;
 
   /**
    * The original data source of the document, if imported.
@@ -609,7 +614,7 @@ export default class Document extends ArchivableModel implements Searchable {
       );
 
       // if saving is successful set the new values on the model itself
-      set(this, { ...params, ...model });
+      set(this, { ...params, ...model.toJSON() });
 
       this.persistedAttributes = this.toAPI();
 
