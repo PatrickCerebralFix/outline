@@ -9,8 +9,6 @@ describe("PropertyDefinition model", () => {
       name: "Rarity",
       description: null,
       type: DocumentPropertyType.MultiSelect,
-      required: false,
-      collectionId: "collection-with-properties",
       options: [
         {
           id: "property-option-rare",
@@ -37,8 +35,6 @@ describe("PropertyDefinition model", () => {
       name: "Health",
       description: null,
       type: DocumentPropertyType.Number,
-      required: false,
-      collectionId: "collection-with-properties",
     });
 
     expect(toJS(definition.options)).toEqual([]);

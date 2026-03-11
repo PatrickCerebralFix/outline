@@ -1,17 +1,21 @@
 import { traceFunction } from "@server/logging/tracing";
 import type { PropertyDefinition } from "@server/models";
 
-function presentPropertyDefinition(definition: PropertyDefinition) {
+function presentPropertyDefinition(
+  definition: PropertyDefinition,
+  options?: {
+    usageCount?: number;
+  }
+) {
   return {
     id: definition.id,
     name: definition.name,
     description: definition.description,
     type: definition.type,
-    required: definition.required,
-    collectionId: definition.collectionId,
     createdAt: definition.createdAt,
     updatedAt: definition.updatedAt,
     deletedAt: definition.deletedAt,
+    usageCount: options?.usageCount,
     options:
       definition.options?.map((option) => ({
         id: option.id,

@@ -18,6 +18,7 @@ import { IconLibrary } from "@shared/utils/IconLibrary";
 import { colorPalette } from "@shared/utils/collections";
 import { CollectionValidation } from "@shared/validations";
 import type Collection from "~/models/Collection";
+import { ActionRow } from "~/components/ActionRow";
 import Button from "~/components/Button";
 import { Collapsible } from "~/components/Collapsible";
 import Input from "~/components/Input";
@@ -66,10 +67,14 @@ export const CollectionForm = observer(function CollectionForm_({
   handleSubmit,
   collection,
   afterFields,
+  hasExternalChanges = false,
+  externalChangesLabel,
 }: {
   handleSubmit: (data: FormData) => void;
   collection?: Collection;
   afterFields?: ReactNode;
+  hasExternalChanges?: boolean;
+  externalChangesLabel?: string;
 }) {
   const team = useCurrentTeam();
   const { t } = useTranslation();
@@ -106,6 +111,10 @@ export const CollectionForm = observer(function CollectionForm_({
   });
 
   const values = watch();
+  const canSubmit =
+    formState.isValid &&
+    (formState.isDirty || hasExternalChanges) &&
+    !formState.isSubmitting;
 
   // Preload the IconPicker component on mount
   useEffect(() => {
@@ -145,105 +154,114 @@ export const CollectionForm = observer(function CollectionForm_({
 
   return (
     <form onSubmit={formHandleSubmit(handleSubmit)}>
-      <Text as="p">
-        <Trans>
-          Collections are used to group documents and choose permissions
-        </Trans>
-      </Text>
-      <HStack>
-        <Input
-          type="text"
-          label={t("Name")}
-          {...register("name", {
-            required: true,
-            maxLength: CollectionValidation.maxNameLength,
-          })}
-          prefix={
-            <Suspense fallback={fallbackIcon}>
-              <StyledIconPicker
-                icon={values.icon}
-                color={values.color ?? iconColor}
-                initial={initial}
-                popoverPosition="right"
-                onOpen={setHasOpenedIconPicker}
-                onChange={handleIconChange}
+      <FormSections>
+        <Text as="p">
+          <Trans>
+            Collections are used to group documents and choose permissions
+          </Trans>
+        </Text>
+        <HStack>
+          <Input
+            type="text"
+            label={t("Name")}
+            {...register("name", {
+              required: true,
+              maxLength: CollectionValidation.maxNameLength,
+            })}
+            prefix={
+              <Suspense fallback={fallbackIcon}>
+                <StyledIconPicker
+                  icon={values.icon}
+                  color={values.color ?? iconColor}
+                  initial={initial}
+                  popoverPosition="right"
+                  onOpen={setHasOpenedIconPicker}
+                  onChange={handleIconChange}
+                />
+              </Suspense>
+            }
+            autoComplete="off"
+            autoFocus
+            flex
+          />
+        </HStack>
+
+        {/* Following controls are available in create flow, but moved elsewhere for edit */}
+        {!collection && (
+          <Controller
+            control={control}
+            name="permission"
+            render={({ field }) => (
+              <InputSelectPermission
+                ref={field.ref}
+                value={field.value}
+                onChange={(
+                  value: CollectionPermission | typeof EmptySelectValue
+                ) => {
+                  field.onChange(value === EmptySelectValue ? null : value);
+                }}
+                help={t(
+                  "The default access for workspace members, you can share with more users or groups later."
+                )}
               />
-            </Suspense>
-          }
-          autoComplete="off"
-          autoFocus
-          flex
-        />
-      </HStack>
+            )}
+          />
+        )}
 
-      {/* Following controls are available in create flow, but moved elsewhere for edit */}
-      {!collection && (
-        <Controller
-          control={control}
-          name="permission"
-          render={({ field }) => (
-            <InputSelectPermission
-              ref={field.ref}
-              value={field.value}
-              onChange={(
-                value: CollectionPermission | typeof EmptySelectValue
-              ) => {
-                field.onChange(value === EmptySelectValue ? null : value);
-              }}
-              help={t(
-                "The default access for workspace members, you can share with more users or groups later."
-              )}
-            />
-          )}
-        />
-      )}
+        {afterFields}
 
-      {(team.sharing || team.getPreference(TeamPreference.Commenting)) && (
-        <Collapsible label={t("Advanced options")}>
-          {team.sharing && (
-            <Controller
-              control={control}
-              name="sharing"
-              render={({ field }) => (
-                <Switch
-                  id="sharing"
-                  label={t("Public document sharing")}
-                  note={t(
-                    "Allow documents within this collection to be shared publicly on the internet."
-                  )}
-                  checked={field.value}
-                  onChange={field.onChange}
-                />
-              )}
-            />
-          )}
+        {(team.sharing || team.getPreference(TeamPreference.Commenting)) && (
+          <Collapsible label={t("Advanced options")}>
+            {team.sharing && (
+              <Controller
+                control={control}
+                name="sharing"
+                render={({ field }) => (
+                  <Switch
+                    id="sharing"
+                    label={t("Public document sharing")}
+                    note={t(
+                      "Allow documents within this collection to be shared publicly on the internet."
+                    )}
+                    checked={field.value}
+                    onChange={field.onChange}
+                  />
+                )}
+              />
+            )}
 
-          {team.getPreference(TeamPreference.Commenting) && (
-            <Controller
-              control={control}
-              name="commenting"
-              render={({ field }) => (
-                <Switch
-                  id="commenting"
-                  label={t("Commenting")}
-                  note={t(
-                    "Allow commenting on documents within this collection."
-                  )}
-                  checked={!!field.value}
-                  onChange={field.onChange}
-                />
-              )}
-            />
-          )}
-        </Collapsible>
-      )}
+            {team.getPreference(TeamPreference.Commenting) && (
+              <Controller
+                control={control}
+                name="commenting"
+                render={({ field }) => (
+                  <Switch
+                    id="commenting"
+                    label={t("Commenting")}
+                    note={t(
+                      "Allow commenting on documents within this collection."
+                    )}
+                    checked={!!field.value}
+                    onChange={field.onChange}
+                  />
+                )}
+              />
+            )}
+          </Collapsible>
+        )}
+      </FormSections>
 
-      {afterFields}
-
-      <HStack justify="flex-end">
+      <ActionRow justify="space-between" align="center">
+        {hasExternalChanges ? (
+          <DirtyNotice type="secondary" size="small">
+            {externalChangesLabel ?? t("Unsaved changes")}
+          </DirtyNotice>
+        ) : (
+          <ActionSpacer />
+        )}
         <Button
           type="submit"
-          disabled={formState.isSubmitting || !formState.isValid}
+          disabled={!canSubmit}
         >
           {collection
             ? formState.isSubmitting
@@ -253,12 +271,27 @@ export const CollectionForm = observer(function CollectionForm_({
               ? `${t("Creating")}…`
               : t("Create")}
         </Button>
-      </HStack>
+      </ActionRow>
     </form>
   );
 });
 
+const FormSections = styled.div`
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding-bottom: 88px;
+`;
+
 const StyledIconPicker = styled(IconPicker.Component)`
   margin-left: 4px;
   margin-right: 4px;
+`;
+
+const DirtyNotice = styled(Text)`
+  margin: 0;
+`;
+
+const ActionSpacer = styled.div`
+  min-height: 20px;
 `;

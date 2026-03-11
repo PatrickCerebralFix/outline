@@ -77,22 +77,18 @@ const BaseSearchSchema = DateFilterSchema.extend({
   /** Structured property filters for document metadata */
   propertyFilters: z
     .array(
-      z
-        .object({
-          propertyDefinitionId: z.string().uuid().optional(),
-          propertyName: z.string().trim().min(1).max(255).optional(),
-          propertyType: z.nativeEnum(DocumentPropertyType).optional(),
-          operator: z.nativeEnum(DocumentPropertyFilterOperator),
-          value: z
-            .union([z.string(), z.number(), z.array(z.string()), z.null()])
-            .optional(),
-        })
-        .refine(
-          (filter) => !!filter.propertyDefinitionId || !!filter.propertyName,
-          {
-            message: "Either propertyDefinitionId or propertyName is required",
-          }
-        )
+      z.object({
+        propertyDefinitionId: z.string().uuid(),
+        operator: z.nativeEnum(DocumentPropertyFilterOperator),
+        value: z
+          .union([
+            z.string(),
+            z.number(),
+            z.array(z.union([z.string(), z.number()])),
+            z.null(),
+          ])
+          .optional(),
+      })
     )
     .optional(),
 });
@@ -345,17 +341,51 @@ export const DocumentsUpdateSchema = BaseSchema.extend({
 
 export type DocumentsUpdateReq = z.infer<typeof DocumentsUpdateSchema>;
 
-export const DocumentsMoveSchema = BaseSchema.extend({
+export const DocumentsUpdatePropertiesSchema = BaseSchema.extend({
   body: BaseIdSchema.extend({
-    /** Id of collection to which the doc is supposed to be moved */
-    collectionId: z.string().uuid().optional().nullish(),
-
-    /** Parent Id, in case if the doc is moved to a new parent */
-    parentDocumentId: z.string().uuid().nullish(),
-
-    /** Helps evaluate the new index in collection structure upon move */
-    index: z.number().gte(0).optional(),
+    /** Structured document properties keyed by property definition ID */
+    properties: z.record(
+      z.string().uuid(),
+      z.union([z.string(), z.number(), z.array(z.string()), z.null()])
+    ),
   }),
+});
+
+export type DocumentsUpdatePropertiesReq = z.infer<
+  typeof DocumentsUpdatePropertiesSchema
+>;
+
+const DocumentsMoveBodySchema = BaseIdSchema.extend({
+  /** Id of collection to which the doc is supposed to be moved */
+  collectionId: z.string().uuid().optional().nullish(),
+
+  /** Parent Id, in case if the doc is moved to a new parent */
+  parentDocumentId: z.string().uuid().nullish(),
+
+  /** Helps evaluate the new index in collection structure upon move */
+  index: z.number().gte(0).optional(),
+
+  /** Confirms that the caller accepts dropping invalid property values. */
+  confirmPropertyDrops: z.boolean().optional(),
+
+  /** Property definitions to directly attach to the destination collection. */
+  attachPropertyDefinitionIds: z.array(z.string().uuid()).optional(),
+});
+
+export const DocumentsMovePreviewSchema = BaseSchema.extend({
+  body: DocumentsMoveBodySchema.omit({
+    confirmPropertyDrops: true,
+    attachPropertyDefinitionIds: true,
+    index: true,
+  }),
+}).refine((req) => !(req.body.parentDocumentId === req.body.id), {
+  message: "infinite loop detected, cannot nest a document inside itself",
+});
+
+export type DocumentsMovePreviewReq = z.infer<typeof DocumentsMovePreviewSchema>;
+
+export const DocumentsMoveSchema = BaseSchema.extend({
+  body: DocumentsMoveBodySchema,
 }).refine((req) => !(req.body.parentDocumentId === req.body.id), {
   message: "infinite loop detected, cannot nest a document inside itself",
 });

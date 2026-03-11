@@ -104,6 +104,7 @@ export default class ImportMarkdownZipTask extends ImportTask {
       collections: [],
       documents: [],
       propertyDefinitions: [],
+      collectionPropertyDefinitions: [],
       attachments: [],
     };
 

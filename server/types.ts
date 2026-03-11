@@ -545,6 +545,29 @@ export type AttachmentJSONExport = {
   key: string;
 };
 
+export type PropertyDefinitionJSONExport = {
+  id: string;
+  name: string;
+  description?: string | null;
+  type: DocumentPropertyType;
+  options?: {
+    id: string;
+    label: string;
+    value: string;
+    color?: string | null;
+    index?: string | null;
+  }[];
+};
+
+export type CollectionPropertyDefinitionJSONExport = {
+  id: string;
+  propertyDefinitionId: string;
+  state: "attached" | "excluded";
+  required: boolean;
+  inheritToChildren: boolean;
+  index?: string | null;
+};
+
 export type CollectionJSONExport = {
   collection: {
     id: string;
@@ -557,21 +580,9 @@ export type CollectionJSONExport = {
     icon?: string | null;
     sort: CollectionSort;
     documentStructure: NavigationNode[] | null;
-    propertyDefinitions?: {
-      id: string;
-      name: string;
-      description?: string | null;
-      type: DocumentPropertyType;
-      required: boolean;
-      options?: {
-        id: string;
-        label: string;
-        value: string;
-        color?: string | null;
-        index?: string | null;
-      }[];
-    }[];
   };
+  propertyDefinitions: PropertyDefinitionJSONExport[];
+  collectionPropertyDefinitions: CollectionPropertyDefinitionJSONExport[];
   documents: {
     [id: string]: DocumentJSONExport;
   };

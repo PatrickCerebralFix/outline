@@ -6,42 +6,33 @@ import { client } from "~/utils/ApiClient";
 import Store from "./base/Store";
 
 export default class PropertyDefinitionsStore extends Store<PropertyDefinition> {
+  private request: Promise<PropertyDefinition[]> | null = null;
+
   constructor(rootStore: RootStore) {
     super(rootStore, PropertyDefinition);
   }
 
-  forCollection(collectionId: string): PropertyDefinition[] {
-    return this.orderedData.filter(
-      (definition) =>
-        definition.collectionId === collectionId && !definition.deletedAt
-    );
-  }
-
   @action
-  fetchDefinitions = async (
-    collectionId?: string
-  ): Promise<PropertyDefinition[]> => {
-    const res = await client.post("/propertyDefinitions.list", {
-      ...(collectionId ? { collectionId } : {}),
-    });
-    invariant(res?.data, "Property definitions list not available");
+  fetchDefinitions = async (): Promise<PropertyDefinition[]> => {
+    if (this.request) {
+      return this.request;
+    }
 
-    return runInAction("PropertyDefinitionsStore#fetchDefinitions", () => {
-      if (collectionId) {
-        const incomingIds = new Set(
-          (res.data as Array<{ id: string }>).map((item) => item.id)
-        );
+    this.request = client
+      .post("/propertyDefinitions.list", {})
+      .then((res) => {
+        invariant(res?.data, "Property definitions list not available");
 
-        this.forCollection(collectionId).forEach((definition) => {
-          if (!incomingIds.has(definition.id)) {
-            this.remove(definition.id);
-          }
+        return runInAction("PropertyDefinitionsStore#fetchDefinitions", () => {
+          res.data.forEach(this.add);
+          this.addPolicies(res.policies);
+          return res.data.map((item: { id: string }) => this.get(item.id)!);
         });
-      }
+      })
+      .finally(() => {
+        this.request = null;
+      });
 
-      res.data.forEach(this.add);
-      this.addPolicies(res.policies);
-      return res.data.map((item: { id: string }) => this.get(item.id)!);
-    });
+    return this.request;
   };
 }

@@ -51,6 +51,10 @@ import slugify from "@shared/utils/slugify";
 import { DocumentValidation } from "@shared/validations";
 import { ValidationError } from "@server/errors";
 import { generateUrlId } from "@server/utils/url";
+import {
+  pruneDocumentPropertiesToDefinitionIds,
+  resolveCollectionPropertyDefinitions,
+} from "@server/utils/collectionPropertyDefinitions";
 import { createContext } from "@server/context";
 import Collection from "./Collection";
 import FileOperation from "./FileOperation";
@@ -1234,17 +1238,24 @@ class Document extends ArchivableModel<
     }
 
     if (collectionChanged && movedDocumentIds.length > 0) {
-      await Promise.all([
-        (this.constructor as typeof Document).update(
-          { properties: {} },
-          { where: { id: movedDocumentIds }, transaction, hooks: false }
-        ),
-        DocumentProperty.destroy({
-          where: { documentId: movedDocumentIds },
-          transaction,
-        }),
-      ]);
-      this.properties = {};
+      const keepPropertyDefinitionIds = (
+        await resolveCollectionPropertyDefinitions(
+          collectionId,
+          this.teamId,
+          transaction
+        )
+      ).effective.map((row) => row.propertyDefinitionId);
+
+      await pruneDocumentPropertiesToDefinitionIds(
+        movedDocumentIds,
+        keepPropertyDefinitionIds,
+        transaction
+      );
+      this.properties = Object.fromEntries(
+        Object.entries(this.properties ?? {}).filter(([definitionId]) =>
+          keepPropertyDefinitionIds.includes(definitionId)
+        )
+      );
     }
 
     if (this.collection && collection) {

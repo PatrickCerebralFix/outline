@@ -4,16 +4,22 @@ import find from "lodash/find";
 import mime from "mime-types";
 import { Fragment, Node } from "prosemirror-model";
 import { randomUUID } from "node:crypto";
-import { DocumentPropertyType, type ProsemirrorData } from "@shared/types";
+import {
+  CollectionPropertyDefinitionState,
+  DocumentPropertyType,
+  type ProsemirrorData,
+} from "@shared/types";
 import { schema, serializer } from "@server/editor";
 import Logger from "@server/logging/Logger";
 import type { FileOperation } from "@server/models";
-import { Attachment } from "@server/models";
+import { Attachment, User } from "@server/models";
 import type {
   AttachmentJSONExport,
   CollectionJSONExport,
+  CollectionPropertyDefinitionJSONExport,
   DocumentJSONExport,
   JSONExportMetadata,
+  PropertyDefinitionJSONExport,
 } from "@server/types";
 import type { DocumentPropertyInput } from "@server/commands/documentPropertyUpdater";
 import type { FileTreeNode } from "@server/utils/ImportHelper";
@@ -24,13 +30,13 @@ import ImportTask from "./ImportTask";
 export default class ImportJSONTask extends ImportTask {
   public async parseData(
     dirPath: string,
-    _: FileOperation
+    fileOperation: FileOperation
   ): Promise<StructuredImportData> {
     const tree = await ImportHelper.toFileTree(dirPath);
     if (!tree) {
       throw new Error("Could not find valid content in zip file");
     }
-    return this.parseFileTree(tree.children);
+    return this.parseFileTree(tree.children, fileOperation);
   }
 
   /**
@@ -41,15 +47,22 @@ export default class ImportJSONTask extends ImportTask {
    * @returns A StructuredImportData object
    */
   private async parseFileTree(
-    tree: FileTreeNode[]
+    tree: FileTreeNode[],
+    fileOperation: FileOperation
   ): Promise<StructuredImportData> {
     let rootPath = "";
     const output: StructuredImportData = {
       collections: [],
       documents: [],
       propertyDefinitions: [],
+      collectionPropertyDefinitions: [],
       attachments: [],
     };
+    const userIdByEmail = await this.loadUserIdByEmail(fileOperation.teamId);
+    const unmatchedUserEmails = new Set<string>();
+    const definitionIdMap = new Map<string, string>();
+    const definitionTypeMap = new Map<string, DocumentPropertyType>();
+    const optionIdMap = new Map<string, string>();
 
     // Load metadata
     let metadata: JSONExportMetadata | undefined = undefined;
@@ -74,10 +87,7 @@ export default class ImportJSONTask extends ImportTask {
 
     function mapDocuments(
       documents: { [id: string]: DocumentJSONExport },
-      collectionId: string,
-      definitionIdMap: Map<string, string>,
-      definitionTypeMap: Map<string, DocumentPropertyType>,
-      optionIdMap: Map<string, string>
+      collectionId: string
     ) {
       Object.values(documents).forEach((node) => {
         const id = randomUUID();
@@ -91,6 +101,8 @@ export default class ImportJSONTask extends ImportTask {
                 const shouldMapOptionIds =
                   definitionType === DocumentPropertyType.Select ||
                   definitionType === DocumentPropertyType.MultiSelect;
+                const shouldMapUserEmails =
+                  definitionType === DocumentPropertyType.User;
                 const mappedValue = shouldMapOptionIds
                   ? Array.isArray(rawValue)
                     ? rawValue.map((value) =>
@@ -101,7 +113,13 @@ export default class ImportJSONTask extends ImportTask {
                     : typeof rawValue === "string"
                       ? (optionIdMap.get(rawValue) ?? rawValue)
                       : rawValue
-                  : rawValue;
+                  : shouldMapUserEmails
+                    ? mapUserPropertyValue(
+                        rawValue,
+                        userIdByEmail,
+                        unmatchedUserEmails
+                      )
+                    : rawValue;
 
                 return [mappedPropertyId, mappedValue];
               })
@@ -133,20 +151,32 @@ export default class ImportJSONTask extends ImportTask {
       });
     }
 
-    function mapPropertyDefinitions(
-      item: CollectionJSONExport,
-      collectionId: string
-    ) {
-      const definitionIdMap = new Map<string, string>();
-      const definitionTypeMap = new Map<string, DocumentPropertyType>();
-      const optionIdMap = new Map<string, string>();
+    function mapPropertyDefinitions(definitions: PropertyDefinitionJSONExport[]) {
+      for (const definition of definitions) {
+        const existingId = definitionIdMap.get(definition.id);
 
-      for (const definition of item.collection.propertyDefinitions ?? []) {
+        if (existingId) {
+          definitionTypeMap.set(definition.id, definition.type);
+          continue;
+        }
+
         const definitionId = randomUUID();
         definitionIdMap.set(definition.id, definitionId);
         definitionTypeMap.set(definition.id, definition.type);
 
         const options = (definition.options ?? []).map((option) => {
+          const existingOptionId = optionIdMap.get(option.id);
+
+          if (existingOptionId) {
+            return {
+              id: existingOptionId,
+              label: option.label,
+              value: option.value,
+              color: option.color,
+              index: option.index,
+            };
+          }
+
           const optionId = randomUUID();
           optionIdMap.set(option.id, optionId);
           return {
@@ -161,20 +191,39 @@ export default class ImportJSONTask extends ImportTask {
         output.propertyDefinitions.push({
           id: definitionId,
           externalId: definition.id,
-          collectionId,
           name: definition.name,
           description: definition.description ?? null,
           type: definition.type,
-          required: definition.required,
           options,
         });
       }
+    }
 
-      return {
-        definitionIdMap,
-        definitionTypeMap,
-        optionIdMap,
-      };
+    function mapCollectionPropertyDefinitions(
+      definitions: CollectionPropertyDefinitionJSONExport[],
+      collectionId: string
+    ) {
+      for (const definition of definitions) {
+        const mappedPropertyDefinitionId =
+          definitionIdMap.get(definition.propertyDefinitionId);
+
+        if (!mappedPropertyDefinitionId) {
+          throw new Error(
+            `Missing property definition for collection property ${definition.id}`
+          );
+        }
+
+        output.collectionPropertyDefinitions.push({
+          id: randomUUID(),
+          externalId: definition.id,
+          collectionId,
+          propertyDefinitionId: mappedPropertyDefinitionId,
+          state: definition.state as CollectionPropertyDefinitionState,
+          required: definition.required,
+          inheritToChildren: definition.inheritToChildren,
+          index: definition.index ?? null,
+        });
+      }
     }
 
     function mapAttachments(attachments: {
@@ -220,31 +269,35 @@ export default class ImportJSONTask extends ImportTask {
       }
 
       const collectionId = randomUUID();
-      const { propertyDefinitions: _propertyDefinitions, ...collectionData } =
-        item.collection;
 
       output.collections.push({
-        ...collectionData,
+        ...item.collection,
         id: collectionId,
         externalId: item.collection.id,
       });
 
-      const { definitionIdMap, definitionTypeMap, optionIdMap } =
-        mapPropertyDefinitions(item, collectionId);
+      mapPropertyDefinitions(item.propertyDefinitions);
+      mapCollectionPropertyDefinitions(
+        item.collectionPropertyDefinitions,
+        collectionId
+      );
 
       if (Object.values(item.documents).length) {
-        mapDocuments(
-          item.documents,
-          collectionId,
-          definitionIdMap,
-          definitionTypeMap,
-          optionIdMap
-        );
+        mapDocuments(item.documents, collectionId);
       }
 
       if (Object.values(item.attachments).length) {
         await mapAttachments(item.attachments);
       }
+    }
+
+    if (unmatchedUserEmails.size > 0) {
+      Logger.warn("Dropped unmatched user property emails during JSON import", {
+        fileOperationId: fileOperation.id,
+        teamId: fileOperation.teamId,
+        count: unmatchedUserEmails.size,
+        emails: Array.from(unmatchedUserEmails),
+      });
     }
 
     // Check all of the attachments we've created against urls and
@@ -331,4 +384,51 @@ export default class ImportJSONTask extends ImportTask {
       document.text = serializer.serialize(transformedNode);
     }
   }
+
+  private async loadUserIdByEmail(teamId: string) {
+    const users = await User.findAll({
+      attributes: ["id", "email"],
+      where: {
+        teamId,
+      },
+    });
+
+    return users.reduce((map, user) => {
+      if (user.email) {
+        map.set(user.email.toLowerCase(), user.id);
+      }
+
+      return map;
+    }, new Map<string, string>());
+  }
+}
+
+function mapUserPropertyValue(
+  rawValue: unknown,
+  userIdByEmail: Map<string, string>,
+  unmatchedUserEmails: Set<string>
+) {
+  const emails = Array.isArray(rawValue)
+    ? rawValue
+    : typeof rawValue === "string"
+      ? [rawValue]
+      : rawValue;
+
+  if (!Array.isArray(emails)) {
+    return rawValue;
+  }
+
+  return emails.flatMap((value) => {
+    if (typeof value !== "string") {
+      return [];
+    }
+
+    const userId = userIdByEmail.get(value.toLowerCase());
+    if (!userId) {
+      unmatchedUserEmails.add(value);
+      return [];
+    }
+
+    return [userId];
+  });
 }

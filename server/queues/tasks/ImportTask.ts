@@ -6,6 +6,7 @@ import type { InferCreationAttributes } from "sequelize";
 import tmp from "tmp";
 import type {
   CollectionSort,
+  CollectionPropertyDefinitionState,
   DocumentPropertyType,
   ProsemirrorData,
 } from "@shared/types";
@@ -30,6 +31,7 @@ import {
   Attachment,
   PropertyDefinition,
   PropertyDefinitionOption,
+  CollectionPropertyDefinition,
 } from "@server/models";
 import { sequelize } from "@server/storage/database";
 import ZipHelper from "@server/utils/ZipHelper";
@@ -101,11 +103,9 @@ export type StructuredImportData = {
   }[];
   propertyDefinitions: {
     id: string;
-    collectionId: string;
     name: string;
     description?: string | null;
     type: DocumentPropertyType;
-    required: boolean;
     options: {
       id: string;
       label: string;
@@ -113,6 +113,17 @@ export type StructuredImportData = {
       color?: string | null;
       index?: string | null;
     }[];
+    /** Optional id from import source, useful for mapping */
+    externalId?: string;
+  }[];
+  collectionPropertyDefinitions: {
+    id: string;
+    collectionId: string;
+    propertyDefinitionId: string;
+    state: CollectionPropertyDefinitionState;
+    required: boolean;
+    inheritToChildren: boolean;
+    index?: string | null;
     /** Optional id from import source, useful for mapping */
     externalId?: string;
   }[];
@@ -335,6 +346,44 @@ export default abstract class ImportTask extends BaseTask<Props> {
     try {
       await this.preprocessDocUrlIds(data);
 
+      await sequelize.transaction(async (transaction) => {
+        for (const propertyDefinition of data.propertyDefinitions) {
+          await PropertyDefinition.create(
+            {
+              id: propertyDefinition.id,
+              teamId: fileOperation.teamId,
+              name: propertyDefinition.name,
+              description: propertyDefinition.description ?? null,
+              type: propertyDefinition.type,
+              createdById: fileOperation.userId,
+              lastModifiedById: fileOperation.userId,
+            },
+            {
+              transaction,
+            }
+          );
+
+          for (const option of propertyDefinition.options) {
+            await PropertyDefinitionOption.create(
+              {
+                id: option.id,
+                propertyDefinitionId: propertyDefinition.id,
+                teamId: fileOperation.teamId,
+                label: option.label,
+                value: option.value,
+                color: option.color ?? null,
+                index: option.index ?? null,
+                createdById: fileOperation.userId,
+                lastModifiedById: fileOperation.userId,
+              },
+              {
+                transaction,
+              }
+            );
+          }
+        }
+      });
+
       // Collections
       for (const item of data.collections) {
         await sequelize.transaction(async (transaction) => {
@@ -431,18 +480,21 @@ export default abstract class ImportTask extends BaseTask<Props> {
 
           collections.set(item.id, collection);
 
-          for (const propertyDefinition of data.propertyDefinitions.filter(
+          for (const collectionPropertyDefinition of data.collectionPropertyDefinitions.filter(
             (definition) => definition.collectionId === collection.id
           )) {
-            await PropertyDefinition.create(
+            await CollectionPropertyDefinition.create(
               {
-                id: propertyDefinition.id,
+                id: collectionPropertyDefinition.id,
                 collectionId: collection.id,
+                propertyDefinitionId:
+                  collectionPropertyDefinition.propertyDefinitionId,
+                state: collectionPropertyDefinition.state,
+                required: collectionPropertyDefinition.required,
+                inheritToChildren:
+                  collectionPropertyDefinition.inheritToChildren,
+                index: collectionPropertyDefinition.index ?? null,
                 teamId: fileOperation.teamId,
-                name: propertyDefinition.name,
-                description: propertyDefinition.description ?? null,
-                type: propertyDefinition.type,
-                required: propertyDefinition.required,
                 createdById: fileOperation.userId,
                 lastModifiedById: fileOperation.userId,
               },
@@ -450,25 +502,6 @@ export default abstract class ImportTask extends BaseTask<Props> {
                 transaction,
               }
             );
-
-            for (const option of propertyDefinition.options) {
-              await PropertyDefinitionOption.create(
-                {
-                  id: option.id,
-                  propertyDefinitionId: propertyDefinition.id,
-                  teamId: fileOperation.teamId,
-                  label: option.label,
-                  value: option.value,
-                  color: option.color ?? null,
-                  index: option.index ?? null,
-                  createdById: fileOperation.userId,
-                  lastModifiedById: fileOperation.userId,
-                },
-                {
-                  transaction,
-                }
-              );
-            }
           }
 
           // Documents

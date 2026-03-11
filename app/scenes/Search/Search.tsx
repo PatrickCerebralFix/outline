@@ -43,6 +43,7 @@ import DocumentTypeFilter from "./components/DocumentTypeFilter";
 import {
   noValueOperators,
   type PropertyFilterState,
+  type PropertyFilterValue,
 } from "./components/PropertyFilter";
 import { PropertyFiltersSection } from "./components/PropertyFiltersSection";
 import RecentSearches from "./components/RecentSearches";
@@ -80,41 +81,24 @@ function parsePropertyFiltersFromUrl(
   if (raw) {
     try {
       const parsed = JSON.parse(raw) as Array<{
-        name?: string;
-        type?: TDocumentPropertyType;
+        id?: string;
         op?: TDocumentPropertyFilterOperator;
-        val?: string;
+        val?: unknown;
       }>;
 
       if (Array.isArray(parsed) && parsed.length > 0) {
         return parsed.map((entry) => ({
-          propertyName: entry.name || undefined,
-          propertyType: entry.type || undefined,
+          propertyDefinitionId: entry.id || undefined,
           operator: entry.op || TDocumentPropertyFilterOperator.Contains,
-          value: entry.val || undefined,
+          value: parseUrlPropertyFilterValue(
+            entry.val,
+            entry.op || TDocumentPropertyFilterOperator.Contains
+          ),
         }));
       }
     } catch {
-      // Invalid JSON — fall through to legacy params
+      // Invalid JSON
     }
-  }
-
-  // Legacy flat params
-  const legacyName = params.get("propertyName");
-  if (legacyName) {
-    return [
-      {
-        propertyName: legacyName,
-        propertyType:
-          (params.get("propertyType") as TDocumentPropertyType) || undefined,
-        operator:
-          (params.get(
-            "propertyOperator"
-          ) as TDocumentPropertyFilterOperator) ||
-          TDocumentPropertyFilterOperator.Contains,
-        value: params.get("propertyValue") || undefined,
-      },
-    ];
   }
 
   return [{ ...defaultFilter }];
@@ -131,7 +115,7 @@ function serializePropertyFiltersToUrl(
 ): string | undefined {
   // Only persist rows that have at least a property selected or a non-default operator
   const meaningful = filters.filter(
-    (f) => f.propertyName || f.value
+    (filter) => filter.propertyDefinitionId && hasPropertyFilterValue(filter.value)
   );
 
   if (meaningful.length === 0) {
@@ -139,10 +123,9 @@ function serializePropertyFiltersToUrl(
   }
 
   const compact = meaningful.map((f) => ({
-    ...(f.propertyName ? { name: f.propertyName } : {}),
-    ...(f.propertyType ? { type: f.propertyType } : {}),
+    id: f.propertyDefinitionId,
     op: f.operator,
-    ...(f.value ? { val: f.value } : {}),
+    ...(hasPropertyFilterValue(f.value) ? { val: f.value } : {}),
   }));
 
   return JSON.stringify(compact);
@@ -156,27 +139,84 @@ function serializePropertyFiltersToUrl(
  * @param propertyType - the property type.
  * @returns the typed value suitable for the API.
  */
-function parsePropertyFilterValue(
-  raw: string | undefined,
-  operator: TDocumentPropertyFilterOperator,
-  propertyType: TDocumentPropertyType | undefined
-): string | number | string[] | undefined {
-  if (noValueOperators.has(operator) || !raw) {
+function parseUrlPropertyFilterValue(
+  raw: unknown,
+  operator: TDocumentPropertyFilterOperator
+): PropertyFilterValue | undefined {
+  if (noValueOperators.has(operator) || raw === undefined || raw === null) {
+    return undefined;
+  }
+
+  if (operator === TDocumentPropertyFilterOperator.Between) {
+    if (Array.isArray(raw)) {
+      return [String(raw[0] ?? ""), String(raw[1] ?? "")];
+    }
+
+    if (typeof raw === "string") {
+      const parts = raw.split(",");
+      return [parts[0] ?? "", parts[1] ?? ""];
+    }
+
     return undefined;
   }
 
   if (arrayOperators.has(operator)) {
-    return raw.split(",").filter(Boolean);
+    if (Array.isArray(raw)) {
+      return raw.map((entry) => String(entry)).filter(Boolean);
+    }
+
+    if (typeof raw === "string") {
+      return raw.split(",").filter(Boolean);
+    }
+
+    return undefined;
+  }
+
+  if (typeof raw === "number") {
+    return String(raw);
+  }
+
+  return typeof raw === "string" ? raw : undefined;
+}
+
+function hasPropertyFilterValue(value: PropertyFilterValue | undefined) {
+  if (value === undefined) {
+    return false;
+  }
+
+  if (Array.isArray(value)) {
+    return value.some((entry) => entry.trim() !== "");
+  }
+
+  return value.trim() !== "";
+}
+
+function toApiPropertyFilterValue(
+  value: PropertyFilterValue | undefined,
+  operator: TDocumentPropertyFilterOperator,
+  propertyType: TDocumentPropertyType | undefined
+): string | number | string[] | undefined {
+  if (noValueOperators.has(operator) || value === undefined) {
+    return undefined;
+  }
+
+  if (operator === TDocumentPropertyFilterOperator.Between) {
+    return Array.isArray(value) ? value : undefined;
+  }
+
+  if (arrayOperators.has(operator)) {
+    return Array.isArray(value) ? value.filter(Boolean) : undefined;
   }
 
   if (
     propertyType === TDocumentPropertyType.Number &&
-    Number.isFinite(Number(raw))
+    typeof value === "string" &&
+    Number.isFinite(Number(value))
   ) {
-    return Number(raw);
+    return Number(value);
   }
 
-  return raw;
+  return typeof value === "string" ? value : undefined;
 }
 
 /**
@@ -186,7 +226,7 @@ function parsePropertyFilterValue(
  * @returns true if the filter should be included in the API call.
  */
 function isFilterComplete(f: PropertyFilterState): boolean {
-  if (!f.propertyName) {
+  if (!f.propertyDefinitionId) {
     return false;
   }
 
@@ -195,8 +235,12 @@ function isFilterComplete(f: PropertyFilterState): boolean {
   }
 
   if (f.operator === TDocumentPropertyFilterOperator.Between) {
-    const parts = (f.value ?? "").split(",");
-    return parts.length === 2 && parts[0] !== "" && parts[1] !== "";
+    return (
+      Array.isArray(f.value) &&
+      f.value.length === 2 &&
+      f.value[0] !== "" &&
+      f.value[1] !== ""
+    );
   }
 
   if (
@@ -206,10 +250,10 @@ function isFilterComplete(f: PropertyFilterState): boolean {
       TDocumentPropertyFilterOperator.Excludes,
     ].includes(f.operator)
   ) {
-    return (f.value ?? "").split(",").filter(Boolean).length > 0;
+    return Array.isArray(f.value) && f.value.filter(Boolean).length > 0;
   }
 
-  return (f.value ?? "").trim() !== "";
+  return typeof f.value === "string" && f.value.trim() !== "";
 }
 
 // ---------------------------------------------------------------------------
@@ -218,7 +262,8 @@ function isFilterComplete(f: PropertyFilterState): boolean {
 
 function Search() {
   const { t } = useTranslation();
-  const { documents, searches, collections } = useStores();
+  const { documents, searches, collections, propertyDefinitions } =
+    useStores();
 
   // routing
   const params = useQuery();
@@ -255,10 +300,6 @@ function Search() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [
       params.get("propertyFilters"),
-      params.get("propertyName"),
-      params.get("propertyType"),
-      params.get("propertyOperator"),
-      params.get("propertyValue"),
     ]
   );
 
@@ -270,14 +311,17 @@ function Search() {
     }
 
     return complete.map((f) => ({
-      propertyName: f.propertyName,
-      propertyType: f.propertyType,
+      propertyDefinitionId: f.propertyDefinitionId!,
       operator: f.operator,
       value: noValueOperators.has(f.operator)
         ? undefined
-        : parsePropertyFilterValue(f.value, f.operator, f.propertyType),
+        : toApiPropertyFilterValue(
+            f.value,
+            f.operator,
+            propertyDefinitions.get(f.propertyDefinitionId!)?.type
+          ),
     }));
-  }, [propertyFiltersState]);
+  }, [propertyDefinitions, propertyFiltersState]);
 
   const isSearchable = !!(
     query ||
@@ -294,7 +338,7 @@ function Search() {
     user: !document || !!(document && query),
     documentType: isSearchable,
     date: isSearchable,
-    property: !document,
+    property: true,
     title: !!query && !document,
     includeChildCollections: !!collectionId && !document,
     sort: isSearchable,
@@ -405,12 +449,6 @@ function Search() {
   const writePropertyFiltersToUrl = React.useCallback(
     (nextFilters: PropertyFilterState[]) => {
       const parsed = queryString.parse(location.search);
-
-      // Remove legacy flat params
-      delete parsed.propertyName;
-      delete parsed.propertyType;
-      delete parsed.propertyOperator;
-      delete parsed.propertyValue;
 
       const serialized = serializePropertyFiltersToUrl(nextFilters);
       if (serialized) {

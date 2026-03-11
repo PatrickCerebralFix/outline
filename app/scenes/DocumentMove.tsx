@@ -1,6 +1,6 @@
 import { observer } from "mobx-react";
-import { useState, useMemo } from "react";
-import { useTranslation, Trans } from "react-i18next";
+import { useEffect, useMemo, useState } from "react";
+import { Trans, useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import styled from "styled-components";
 import { ellipsis } from "@shared/styles";
@@ -18,49 +18,99 @@ type Props = {
 };
 
 function DocumentMove({ document }: Props) {
-  const { dialogs, policies } = useStores();
+  const { dialogs, documents, policies } = useStores();
   const { t } = useTranslation();
   const collectionTrees = useCollectionTrees();
-  const [moving, setMoving] = useState<boolean>(false);
+  const [moving, setMoving] = useState(false);
+  const [previewLoading, setPreviewLoading] = useState(false);
   const [selectedPath, selectPath] = useState<NavigationNode | null>(null);
+  const [droppedPropertyNames, setDroppedPropertyNames] = useState<string[]>([]);
+  const [attachCandidates, setAttachCandidates] = useState<string[]>([]);
+  const [canAttachToDestination, setCanAttachToDestination] = useState(false);
+  const [attachMissingProperties, setAttachMissingProperties] = useState(true);
 
   const items = useMemo(() => {
-    // Recursively filter out the document itself and its existing parent doc, if any.
     const filterSourceDocument = (node: NavigationNode): NavigationNode => ({
       ...node,
       children: node.children
         ?.filter(
-          (c) => c.id !== document.id && c.id !== document.parentDocumentId
+          (child) => child.id !== document.id && child.id !== document.parentDocumentId
         )
         .map(filterSourceDocument),
     });
 
     const nodes = collectionTrees
       .map(filterSourceDocument)
-      // Filter out collections that we don't have permission to create documents in.
       .filter((node) =>
         node.collectionId
           ? policies.get(node.collectionId)?.abilities.createDocument
           : true
       );
 
-    // If the document we're moving is a template, only show collections as
-    // move targets.
     if (document.isTemplate) {
       return nodes
         .filter((node) => node.type === "collection")
         .map((node) => ({ ...node, children: [] }));
     }
+
     return nodes;
   }, [
-    policies,
     collectionTrees,
     document.id,
-    document.parentDocumentId,
     document.isTemplate,
+    document.parentDocumentId,
+    policies,
   ]);
 
-  const move = async () => {
+  useEffect(() => {
+    if (!selectedPath) {
+      setDroppedPropertyNames([]);
+      setAttachCandidates([]);
+      setCanAttachToDestination(false);
+      setAttachMissingProperties(true);
+      return;
+    }
+
+    let cancelled = false;
+
+    const loadPreview = async () => {
+      setPreviewLoading(true);
+
+      try {
+        const preview = await documents.movePreview({
+          documentId: document.id,
+          collectionId: selectedPath.collectionId as string,
+          parentDocumentId:
+            selectedPath.type === "document" ? selectedPath.id : null,
+        });
+
+        if (cancelled) {
+          return;
+        }
+
+        setDroppedPropertyNames(preview.droppedPropertyNames);
+        setAttachCandidates(preview.attachCandidates);
+        setCanAttachToDestination(preview.canAttachToDestination);
+        setAttachMissingProperties(preview.canAttachToDestination);
+      } catch (err) {
+        if (!cancelled) {
+          toast.error((err as Error).message);
+        }
+      } finally {
+        if (!cancelled) {
+          setPreviewLoading(false);
+        }
+      }
+    };
+
+    void loadPreview();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [document.id, documents, selectedPath]);
+
+  const handleMove = async () => {
     if (!selectedPath) {
       toast.message(t("Select a location to move"));
       return;
@@ -68,18 +118,18 @@ function DocumentMove({ document }: Props) {
 
     try {
       setMoving(true);
-      const { type, id: parentDocumentId } = selectedPath;
-
-      const collectionId = selectedPath.collectionId as string;
-
-      if (type === "document") {
-        await document.move({ collectionId, parentDocumentId });
-      } else {
-        await document.move({ collectionId });
-      }
-
+      await documents.move({
+        documentId: document.id,
+        collectionId: selectedPath.collectionId as string,
+        parentDocumentId:
+          selectedPath.type === "document" ? selectedPath.id : undefined,
+        confirmPropertyDrops: true,
+        attachPropertyDefinitionIds:
+          attachMissingProperties && canAttachToDestination
+            ? attachCandidates
+            : undefined,
+      });
       toast.success(t("Document moved"));
-
       dialogs.closeAllModals();
     } catch (_err) {
       toast.error(t("Couldn’t move the document, try again?"));
@@ -90,25 +140,60 @@ function DocumentMove({ document }: Props) {
 
   return (
     <FlexContainer column>
-      <DocumentExplorer items={items} onSubmit={move} onSelect={selectPath} />
+      <DocumentExplorer
+        items={items}
+        onSubmit={handleMove}
+        onSelect={selectPath}
+      />
       <Footer justify="space-between" align="center" gap={8}>
-        <StyledText type="secondary">
-          {selectedPath ? (
-            <Trans
-              defaults="Move to <em>{{ location }}</em>"
-              values={{
-                location: selectedPath.title || t("Untitled"),
-              }}
-              components={{
-                em: <strong />,
-              }}
-            />
-          ) : (
-            t("Select a location to move")
+        <FooterText column gap={4}>
+          <StyledText type="secondary">
+            {selectedPath ? (
+              <Trans
+                defaults="Move to <em>{{ location }}</em>"
+                values={{
+                  location: selectedPath.title || t("Untitled"),
+                }}
+                components={{
+                  em: <strong />,
+                }}
+              />
+            ) : (
+              t("Select a location to move")
+            )}
+          </StyledText>
+          {!!selectedPath && droppedPropertyNames.length > 0 && (
+            <>
+              <Text type="secondary" size="small">
+                {t("This move will remove:")} {droppedPropertyNames.join(", ")}
+              </Text>
+              {canAttachToDestination && attachCandidates.length > 0 && (
+                <CheckboxRow align="center" gap={8}>
+                  <input
+                    id="attach-missing-properties"
+                    type="checkbox"
+                    checked={attachMissingProperties}
+                    onChange={(ev) =>
+                      setAttachMissingProperties(ev.target.checked)
+                    }
+                  />
+                  <label htmlFor="attach-missing-properties">
+                    {t("Also add those properties to the destination collection")}
+                  </label>
+                </CheckboxRow>
+              )}
+            </>
           )}
-        </StyledText>
-        <Button disabled={!selectedPath || moving} onClick={move}>
-          {moving ? `${t("Moving")}…` : t("Move")}
+        </FooterText>
+        <Button
+          disabled={!selectedPath || moving || previewLoading}
+          onClick={handleMove}
+        >
+          {moving
+            ? `${t("Moving")}…`
+            : previewLoading
+              ? `${t("Loading")}…`
+              : t("Move")}
         </Button>
       </Footer>
     </FlexContainer>
@@ -123,15 +208,22 @@ export const FlexContainer = styled(Flex)`
 `;
 
 export const Footer = styled(Flex)`
-  height: 64px;
+  min-height: 64px;
   border-top: 1px solid ${(props) => props.theme.horizontalRule};
-  padding-left: 24px;
-  padding-right: 24px;
+  padding: 16px 24px;
+`;
+
+const FooterText = styled(Flex)`
+  min-width: 0;
 `;
 
 export const StyledText = styled(Text)`
   ${ellipsis()}
   margin-bottom: 0;
+`;
+
+const CheckboxRow = styled(Flex)`
+  font-size: 13px;
 `;
 
 export default observer(DocumentMove);

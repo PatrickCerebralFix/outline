@@ -381,20 +381,10 @@ describe("SearchHelper", () => {
       });
 
       unityDocument.properties = {
-        [definition.id]: {
-          definitionId: definition.id,
-          name: definition.name,
-          type: definition.type,
-          value: "Unity",
-        },
+        [definition.id]: "Unity",
       };
       unrealDocument.properties = {
-        [definition.id]: {
-          definitionId: definition.id,
-          name: definition.name,
-          type: definition.type,
-          value: "Unreal",
-        },
+        [definition.id]: "Unreal",
       };
       await unityDocument.save();
       await unrealDocument.save();
@@ -442,20 +432,10 @@ describe("SearchHelper", () => {
       });
 
       unityDocument.properties = {
-        [definition.id]: {
-          definitionId: definition.id,
-          name: definition.name,
-          type: definition.type,
-          value: "Unity",
-        },
+        [definition.id]: "Unity",
       };
       unrealDocument.properties = {
-        [definition.id]: {
-          definitionId: definition.id,
-          name: definition.name,
-          type: definition.type,
-          value: "Unreal",
-        },
+        [definition.id]: "Unreal",
       };
       await unityDocument.save();
       await unrealDocument.save();
@@ -522,28 +502,13 @@ describe("SearchHelper", () => {
       });
 
       unityInCollectionA.properties = {
-        [definitionA.id]: {
-          definitionId: definitionA.id,
-          name: definitionA.name,
-          type: definitionA.type,
-          value: "Unity",
-        },
+        [definitionA.id]: "Unity",
       };
       unrealInCollectionA.properties = {
-        [definitionA.id]: {
-          definitionId: definitionA.id,
-          name: definitionA.name,
-          type: definitionA.type,
-          value: "Unreal",
-        },
+        [definitionA.id]: "Unreal",
       };
       unityInCollectionB.properties = {
-        [definitionB.id]: {
-          definitionId: definitionB.id,
-          name: definitionB.name,
-          type: definitionB.type,
-          value: "Unity",
-        },
+        [definitionB.id]: "Unity",
       };
       await unityInCollectionA.save();
       await unrealInCollectionA.save();
@@ -552,18 +517,15 @@ describe("SearchHelper", () => {
       const { results } = await SearchHelper.searchForUser(user, {
         propertyFilters: [
           {
-            propertyName: "Engine",
-            propertyType: DocumentPropertyType.Text,
+            propertyDefinitionId: definitionA.id,
             operator: DocumentPropertyFilterOperator.Contains,
             value: "Unity",
           },
         ],
       });
 
-      expect(results.length).toBe(2);
-      expect(results.map((result) => result.document.id).sort()).toEqual(
-        [unityInCollectionA.id, unityInCollectionB.id].sort()
-      );
+      expect(results.length).toBe(1);
+      expect(results[0].document.id).toBe(unityInCollectionA.id);
     });
 
     it("should filter by semantic selected option value across collections", async () => {
@@ -644,49 +606,13 @@ describe("SearchHelper", () => {
       });
 
       unityInCollectionA.properties = {
-        [definitionA.id]: {
-          definitionId: definitionA.id,
-          name: definitionA.name,
-          type: definitionA.type,
-          value: unityOptionA.id,
-          options: [
-            {
-              id: unityOptionA.id,
-              value: unityOptionA.value,
-              color: unityOptionA.color,
-            },
-          ],
-        },
+        [definitionA.id]: unityOptionA.id,
       };
       unrealInCollectionA.properties = {
-        [definitionA.id]: {
-          definitionId: definitionA.id,
-          name: definitionA.name,
-          type: definitionA.type,
-          value: unrealOptionA.id,
-          options: [
-            {
-              id: unrealOptionA.id,
-              value: unrealOptionA.value,
-              color: unrealOptionA.color,
-            },
-          ],
-        },
+        [definitionA.id]: unrealOptionA.id,
       };
       unityInCollectionB.properties = {
-        [definitionB.id]: {
-          definitionId: definitionB.id,
-          name: definitionB.name,
-          type: definitionB.type,
-          value: unityOptionB.id,
-          options: [
-            {
-              id: unityOptionB.id,
-              value: unityOptionB.value,
-              color: unityOptionB.color,
-            },
-          ],
-        },
+        [definitionB.id]: unityOptionB.id,
       };
       await unityInCollectionA.save();
       await unrealInCollectionA.save();
@@ -695,18 +621,15 @@ describe("SearchHelper", () => {
       const { results } = await SearchHelper.searchForUser(user, {
         propertyFilters: [
           {
-            propertyName: "Engine",
-            propertyType: DocumentPropertyType.Select,
+            propertyDefinitionId: definitionA.id,
             operator: DocumentPropertyFilterOperator.Equals,
             value: "Unity",
           },
         ],
       });
 
-      expect(results.length).toBe(2);
-      expect(results.map((result) => result.document.id).sort()).toEqual(
-        [unityInCollectionA.id, unityInCollectionB.id].sort()
-      );
+      expect(results.length).toBe(1);
+      expect(results[0].document.id).toBe(unityInCollectionA.id);
     });
 
     it("should filter by number property with GreaterThan", async () => {
@@ -738,20 +661,10 @@ describe("SearchHelper", () => {
       });
 
       doc50.properties = {
-        [definition.id]: {
-          definitionId: definition.id,
-          name: definition.name,
-          type: definition.type,
-          value: 50,
-        },
+        [definition.id]: 50,
       };
       doc100.properties = {
-        [definition.id]: {
-          definitionId: definition.id,
-          name: definition.name,
-          type: definition.type,
-          value: 100,
-        },
+        [definition.id]: 100,
       };
       await doc50.save();
       await doc100.save();
@@ -759,8 +672,7 @@ describe("SearchHelper", () => {
       const { results } = await SearchHelper.searchForUser(user, {
         propertyFilters: [
           {
-            propertyName: "Score",
-            propertyType: DocumentPropertyType.Number,
+            propertyDefinitionId: definition.id,
             operator: DocumentPropertyFilterOperator.GreaterThan,
             value: 75,
           },
@@ -800,20 +712,10 @@ describe("SearchHelper", () => {
       });
 
       doc50.properties = {
-        [definition.id]: {
-          definitionId: definition.id,
-          name: definition.name,
-          type: definition.type,
-          value: 50,
-        },
+        [definition.id]: 50,
       };
       doc100.properties = {
-        [definition.id]: {
-          definitionId: definition.id,
-          name: definition.name,
-          type: definition.type,
-          value: 100,
-        },
+        [definition.id]: 100,
       };
       await doc50.save();
       await doc100.save();
@@ -821,8 +723,7 @@ describe("SearchHelper", () => {
       const { results } = await SearchHelper.searchForUser(user, {
         propertyFilters: [
           {
-            propertyName: "Score",
-            propertyType: DocumentPropertyType.Number,
+            propertyDefinitionId: definition.id,
             operator: DocumentPropertyFilterOperator.LessThan,
             value: 75,
           },
@@ -867,28 +768,13 @@ describe("SearchHelper", () => {
       });
 
       doc25.properties = {
-        [definition.id]: {
-          definitionId: definition.id,
-          name: definition.name,
-          type: definition.type,
-          value: 25,
-        },
+        [definition.id]: 25,
       };
       doc50.properties = {
-        [definition.id]: {
-          definitionId: definition.id,
-          name: definition.name,
-          type: definition.type,
-          value: 50,
-        },
+        [definition.id]: 50,
       };
       doc75.properties = {
-        [definition.id]: {
-          definitionId: definition.id,
-          name: definition.name,
-          type: definition.type,
-          value: 75,
-        },
+        [definition.id]: 75,
       };
       await doc25.save();
       await doc50.save();
@@ -897,8 +783,7 @@ describe("SearchHelper", () => {
       const { results } = await SearchHelper.searchForUser(user, {
         propertyFilters: [
           {
-            propertyName: "Score",
-            propertyType: DocumentPropertyType.Number,
+            propertyDefinitionId: definition.id,
             operator: DocumentPropertyFilterOperator.Between,
             value: [30, 60],
           },
@@ -938,20 +823,10 @@ describe("SearchHelper", () => {
       });
 
       docJan.properties = {
-        [definition.id]: {
-          definitionId: definition.id,
-          name: definition.name,
-          type: definition.type,
-          value: "2024-01-15",
-        },
+        [definition.id]: "2024-01-15",
       };
       docJun.properties = {
-        [definition.id]: {
-          definitionId: definition.id,
-          name: definition.name,
-          type: definition.type,
-          value: "2024-06-15",
-        },
+        [definition.id]: "2024-06-15",
       };
       await docJan.save();
       await docJun.save();
@@ -959,8 +834,7 @@ describe("SearchHelper", () => {
       const { results } = await SearchHelper.searchForUser(user, {
         propertyFilters: [
           {
-            propertyName: "DueDate",
-            propertyType: DocumentPropertyType.Date,
+            propertyDefinitionId: definition.id,
             operator: DocumentPropertyFilterOperator.GreaterThan,
             value: "2024-03-01",
           },
@@ -1000,20 +874,10 @@ describe("SearchHelper", () => {
       });
 
       docJan.properties = {
-        [definition.id]: {
-          definitionId: definition.id,
-          name: definition.name,
-          type: definition.type,
-          value: "2024-01-15",
-        },
+        [definition.id]: "2024-01-15",
       };
       docJun.properties = {
-        [definition.id]: {
-          definitionId: definition.id,
-          name: definition.name,
-          type: definition.type,
-          value: "2024-06-15",
-        },
+        [definition.id]: "2024-06-15",
       };
       await docJan.save();
       await docJun.save();
@@ -1021,8 +885,7 @@ describe("SearchHelper", () => {
       const { results } = await SearchHelper.searchForUser(user, {
         propertyFilters: [
           {
-            propertyName: "DueDate",
-            propertyType: DocumentPropertyType.Date,
+            propertyDefinitionId: definition.id,
             operator: DocumentPropertyFilterOperator.LessThan,
             value: "2024-03-01",
           },
@@ -1067,28 +930,13 @@ describe("SearchHelper", () => {
       });
 
       docJan.properties = {
-        [definition.id]: {
-          definitionId: definition.id,
-          name: definition.name,
-          type: definition.type,
-          value: "2024-01-15",
-        },
+        [definition.id]: "2024-01-15",
       };
       docJun.properties = {
-        [definition.id]: {
-          definitionId: definition.id,
-          name: definition.name,
-          type: definition.type,
-          value: "2024-06-15",
-        },
+        [definition.id]: "2024-06-15",
       };
       docNov.properties = {
-        [definition.id]: {
-          definitionId: definition.id,
-          name: definition.name,
-          type: definition.type,
-          value: "2024-11-15",
-        },
+        [definition.id]: "2024-11-15",
       };
       await docJan.save();
       await docJun.save();
@@ -1097,8 +945,7 @@ describe("SearchHelper", () => {
       const { results } = await SearchHelper.searchForUser(user, {
         propertyFilters: [
           {
-            propertyName: "DueDate",
-            propertyType: DocumentPropertyType.Date,
+            propertyDefinitionId: definition.id,
             operator: DocumentPropertyFilterOperator.Between,
             value: ["2024-02-01", "2024-08-01"],
           },
@@ -1146,12 +993,7 @@ describe("SearchHelper", () => {
         },
       };
       docB.properties = {
-        [definition.id]: {
-          definitionId: definition.id,
-          name: definition.name,
-          type: definition.type,
-          value: ["optC"],
-        },
+        [definition.id]: ["optC"],
       };
       await docA.save();
       await docB.save();
@@ -1159,8 +1001,7 @@ describe("SearchHelper", () => {
       const { results } = await SearchHelper.searchForUser(user, {
         propertyFilters: [
           {
-            propertyName: "Tags",
-            propertyType: DocumentPropertyType.MultiSelect,
+            propertyDefinitionId: definition.id,
             operator: DocumentPropertyFilterOperator.IncludesAny,
             value: ["optB", "optC"],
           },
@@ -1210,12 +1051,7 @@ describe("SearchHelper", () => {
         },
       };
       docB.properties = {
-        [definition.id]: {
-          definitionId: definition.id,
-          name: definition.name,
-          type: definition.type,
-          value: ["optC"],
-        },
+        [definition.id]: ["optC"],
       };
       await docA.save();
       await docB.save();
@@ -1223,8 +1059,7 @@ describe("SearchHelper", () => {
       const { results } = await SearchHelper.searchForUser(user, {
         propertyFilters: [
           {
-            propertyName: "Tags",
-            propertyType: DocumentPropertyType.MultiSelect,
+            propertyDefinitionId: definition.id,
             operator: DocumentPropertyFilterOperator.IncludesAll,
             value: ["optA", "optB"],
           },
@@ -1233,6 +1068,90 @@ describe("SearchHelper", () => {
 
       expect(results.length).toBe(1);
       expect(results[0].document.id).toBe(docA.id);
+    });
+
+    it("should filter by user property with IncludesAny", async () => {
+      const team = await buildTeam();
+      const actor = await buildUser({ teamId: team.id });
+      const assignee = await buildUser({ teamId: team.id });
+      const collection = await buildCollection({
+        teamId: team.id,
+        userId: actor.id,
+      });
+      const definition = await PropertyDefinition.create({
+        name: "Assignees",
+        description: null,
+        type: DocumentPropertyType.User,
+        required: false,
+        collectionId: collection.id,
+        teamId: team.id,
+        createdById: actor.id,
+        lastModifiedById: actor.id,
+      });
+      const docA = await buildDocument({
+        teamId: team.id,
+        userId: actor.id,
+        collectionId: collection.id,
+      });
+      const docB = await buildDocument({
+        teamId: team.id,
+        userId: actor.id,
+        collectionId: collection.id,
+      });
+
+      docA.properties = {
+        [definition.id]: [assignee.id],
+      };
+      docB.properties = {
+        [definition.id]: [actor.id],
+      };
+      await docA.save();
+      await docB.save();
+
+      const { results } = await SearchHelper.searchForUser(actor, {
+        propertyFilters: [
+          {
+            propertyDefinitionId: definition.id,
+            operator: DocumentPropertyFilterOperator.IncludesAny,
+            value: [assignee.id],
+          },
+        ],
+      });
+
+      expect(results.map((result) => result.document.id)).toEqual([docA.id]);
+    });
+
+    it("should reject invalid user IDs in user property filters", async () => {
+      const team = await buildTeam();
+      const actor = await buildUser({ teamId: team.id });
+      const foreignUser = await buildUser();
+      const collection = await buildCollection({
+        teamId: team.id,
+        userId: actor.id,
+      });
+
+      const definition = await PropertyDefinition.create({
+        name: "Assignees",
+        description: null,
+        type: DocumentPropertyType.User,
+        required: false,
+        collectionId: collection.id,
+        teamId: team.id,
+        createdById: actor.id,
+        lastModifiedById: actor.id,
+      });
+
+      await expect(
+        SearchHelper.searchForUser(actor, {
+          propertyFilters: [
+            {
+              propertyDefinitionId: definition.id,
+              operator: DocumentPropertyFilterOperator.IncludesAny,
+              value: [foreignUser.id],
+            },
+          ],
+        })
+      ).rejects.toThrow("Invalid user ID in property filter");
     });
 
     it("should filter semantic multiselect with IncludesAll by option values", async () => {
@@ -1336,34 +1255,10 @@ describe("SearchHelper", () => {
         },
       };
       docWithOne.properties = {
-        [definitionA.id]: {
-          definitionId: definitionA.id,
-          name: definitionA.name,
-          type: definitionA.type,
-          value: [actionA.id],
-          options: [
-            {
-              id: actionA.id,
-              value: actionA.value,
-              color: actionA.color,
-            },
-          ],
-        },
+        [definitionA.id]: [actionA.id],
       };
       docInOtherCollection.properties = {
-        [definitionB.id]: {
-          definitionId: definitionB.id,
-          name: definitionB.name,
-          type: definitionB.type,
-          value: [actionB.id],
-          options: [
-            {
-              id: actionB.id,
-              value: actionB.value,
-              color: actionB.color,
-            },
-          ],
-        },
+        [definitionB.id]: [actionB.id],
       };
       await docWithAll.save();
       await docWithOne.save();
@@ -1372,8 +1267,7 @@ describe("SearchHelper", () => {
       const { results } = await SearchHelper.searchForUser(user, {
         propertyFilters: [
           {
-            propertyName: "Tags",
-            propertyType: DocumentPropertyType.MultiSelect,
+            propertyDefinitionId: definitionA.id,
             operator: DocumentPropertyFilterOperator.IncludesAll,
             value: ["Action", "Puzzle"],
           },
@@ -1421,12 +1315,7 @@ describe("SearchHelper", () => {
         },
       };
       docB.properties = {
-        [definition.id]: {
-          definitionId: definition.id,
-          name: definition.name,
-          type: definition.type,
-          value: ["optC"],
-        },
+        [definition.id]: ["optC"],
       };
       await docA.save();
       await docB.save();
@@ -1434,8 +1323,7 @@ describe("SearchHelper", () => {
       const { results } = await SearchHelper.searchForUser(user, {
         propertyFilters: [
           {
-            propertyName: "Tags",
-            propertyType: DocumentPropertyType.MultiSelect,
+            propertyDefinitionId: definition.id,
             operator: DocumentPropertyFilterOperator.Excludes,
             value: ["optA"],
           },
@@ -2320,6 +2208,70 @@ describe("SearchHelper", () => {
       expect(results[0].document.id).toBe(doc2.id);
       expect(results[1].document.id).toBe(doc3.id);
       expect(results[2].document.id).toBe(doc1.id);
+    });
+
+    it("should reject invalid numeric property filters", async () => {
+      const team = await buildTeam();
+      const user = await buildUser({ teamId: team.id });
+      const collection = await buildCollection({
+        teamId: team.id,
+        userId: user.id,
+      });
+
+      const definition = await PropertyDefinition.create({
+        collectionId: collection.id,
+        teamId: team.id,
+        name: "Score",
+        description: null,
+        type: DocumentPropertyType.Number,
+        required: false,
+        createdById: user.id,
+        lastModifiedById: user.id,
+      });
+
+      await expect(
+        SearchHelper.searchForUser(user, {
+          propertyFilters: [
+            {
+              propertyDefinitionId: definition.id,
+              operator: DocumentPropertyFilterOperator.GreaterThan,
+              value: "not-a-number",
+            },
+          ],
+        })
+      ).rejects.toThrow("Property filter value must be numeric");
+    });
+
+    it("should reject invalid date property filters", async () => {
+      const team = await buildTeam();
+      const user = await buildUser({ teamId: team.id });
+      const collection = await buildCollection({
+        teamId: team.id,
+        userId: user.id,
+      });
+
+      const definition = await PropertyDefinition.create({
+        collectionId: collection.id,
+        teamId: team.id,
+        name: "Launch date",
+        description: null,
+        type: DocumentPropertyType.Date,
+        required: false,
+        createdById: user.id,
+        lastModifiedById: user.id,
+      });
+
+      await expect(
+        SearchHelper.searchForUser(user, {
+          propertyFilters: [
+            {
+              propertyDefinitionId: definition.id,
+              operator: DocumentPropertyFilterOperator.Between,
+              value: ["bad-date", "2024-01-01"],
+            },
+          ],
+        })
+      ).rejects.toThrow("Property filter value must be a valid date");
     });
   });
 

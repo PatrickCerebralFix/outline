@@ -2,7 +2,6 @@ import * as React from "react";
 import styled from "styled-components";
 import type { Props as InputProps } from "./Input";
 import Input from "./Input";
-import Relative from "./Sidebar/components/Relative";
 import { SwatchButton } from "./SwatchButton";
 
 /**
@@ -20,23 +19,21 @@ type Props = Omit<InputProps, "onChange"> & {
  * Automatically formats hex color values with a leading # character.
  */
 const InputColor: React.FC<Props> = ({ value, onChange, ...rest }: Props) => (
-  <Relative>
-    <Input
-      value={value}
-      onChange={(event) => onChange(event.target.value.replace(/^#?/, "#"))}
-      placeholder="#"
-      maxLength={7}
-      {...rest}
-    />
-    <PositionedSwatchButton color={value} onChange={onChange} size={22} />
-  </Relative>
+  <Input
+    value={value}
+    onChange={(event) => onChange(event.target.value.replace(/^#?/, "#"))}
+    placeholder="#"
+    maxLength={7}
+    {...rest}
+  >
+    <InlineSwatchButton color={value} onChange={onChange} size={22} />
+  </Input>
 );
 
-const PositionedSwatchButton = styled(SwatchButton)`
+const InlineSwatchButton = styled(SwatchButton)`
   border: 1px solid ${(props) => props.theme.inputBorder};
-  position: absolute;
-  bottom: 21px;
-  right: 6px;
+  margin-right: 6px;
+  flex-shrink: 0;
 `;
 
 export default InputColor;

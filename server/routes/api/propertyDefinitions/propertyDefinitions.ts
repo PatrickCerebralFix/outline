@@ -1,36 +1,32 @@
 import Router from "koa-router";
-import { DocumentPropertyType } from "@shared/types";
-import { syncDocumentPropertiesForDefinition } from "@server/commands/documentPropertyUpdater";
 import { NotFoundError, ValidationError } from "@server/errors";
 import auth from "@server/middlewares/authentication";
 import { transaction } from "@server/middlewares/transaction";
 import validate from "@server/middlewares/validate";
 import {
-  Collection,
+  CollectionPropertyDefinition,
   DocumentProperty,
   PropertyDefinition,
   PropertyDefinitionOption,
+  User,
 } from "@server/models";
-import { authorize } from "@server/policies";
+import { authorize, can } from "@server/policies";
 import { presentPolicies, presentPropertyDefinition } from "@server/presenters";
+import ReconcileDocumentPropertyOptionsTask from "@server/queues/tasks/ReconcileDocumentPropertyOptionsTask";
 import { sequelize } from "@server/storage/database";
 import type { APIContext } from "@server/types";
+import { resolveEffectivePropertyDefinitionIdsForCollections } from "@server/utils/collectionPropertyDefinitions";
+import {
+  CollectionPropertyDefinitionState,
+  DocumentPropertyType,
+} from "@shared/types";
+import { QueryTypes, UniqueConstraintError } from "sequelize";
 import * as T from "./schema";
 
 const router = new Router();
 
-function definitionIncludes(userId: string) {
+function definitionIncludes() {
   return [
-    {
-      model: Collection.scope([
-        "defaultScope",
-        {
-          method: ["withMembership", userId],
-        },
-      ]),
-      as: "collection",
-      required: true,
-    },
     {
       association: "options",
       required: false,
@@ -49,6 +45,18 @@ function assertOptionsSupported(
   if (!supportsOptions && hasOptions) {
     throw ValidationError(`Property type "${type}" does not support options`);
   }
+}
+
+function normalizeDefinitionName(name: string) {
+  return name.trim();
+}
+
+function rethrowDuplicateDefinitionError(error: unknown): never {
+  if (error instanceof UniqueConstraintError) {
+    throw ValidationError("A property with this name and type already exists");
+  }
+
+  throw error;
 }
 
 async function syncDefinitionOptions(
@@ -121,69 +129,90 @@ async function syncDefinitionOptions(
   }
 }
 
+async function listDefinitionsForAccessibleCollections(user: User) {
+  const collectionIds = await user.collectionIds();
+
+  if (collectionIds.length === 0) {
+    return [];
+  }
+
+  const definitionIdsByCollectionId =
+    await resolveEffectivePropertyDefinitionIdsForCollections(
+      collectionIds,
+      user.teamId
+    );
+  const definitionIds = Array.from(
+    new Set(
+      Array.from(definitionIdsByCollectionId.values()).flatMap((ids) =>
+        Array.from(ids)
+      )
+    )
+  );
+
+  if (definitionIds.length === 0) {
+    return [];
+  }
+
+  return PropertyDefinition.findAll({
+    where: {
+      id: definitionIds,
+      teamId: user.teamId,
+      deletedAt: null,
+    },
+    include: definitionIncludes(),
+    order: [["name", "ASC"]],
+  });
+}
+
+async function listDefinitionUsageCounts(teamId: string) {
+  const rows = await sequelize.query<{
+    propertyDefinitionId: string;
+    count: number;
+  }>(
+    `SELECT "propertyDefinitionId", COUNT(*)::int AS "count"
+     FROM collection_property_definitions
+     WHERE "teamId" = :teamId
+       AND "deletedAt" IS NULL
+       AND state = :state
+     GROUP BY "propertyDefinitionId"`,
+    {
+      replacements: {
+        teamId,
+        state: CollectionPropertyDefinitionState.Attached,
+      },
+      type: QueryTypes.SELECT,
+    }
+  );
+
+  return new Map(rows.map((row) => [row.propertyDefinitionId, row.count]));
+}
+
 router.post(
   "propertyDefinitions.list",
   auth(),
   validate(T.PropertyDefinitionsListSchema),
   async (ctx: APIContext<T.PropertyDefinitionsListReq>) => {
     const { user } = ctx.state.auth;
-    const { collectionId } = ctx.input.body;
 
-    let definitions: PropertyDefinition[] = [];
-
-    if (collectionId) {
-      const collection = await Collection.findByPk(collectionId, {
-        userId: user.id,
-        rejectOnEmpty: true,
-      });
-      authorize(user, "readDocument", collection);
-
-      definitions = await PropertyDefinition.findAll({
-        where: {
-          collectionId,
-          teamId: user.teamId,
-        },
-        include: definitionIncludes(user.id),
-        order: [
-          ["createdAt", "ASC"],
-          [{ model: PropertyDefinitionOption, as: "options" }, "index", "ASC"],
-          [
-            { model: PropertyDefinitionOption, as: "options" },
-            "createdAt",
-            "ASC",
-          ],
-        ],
-      });
-    } else {
-      const collectionIds = await user.collectionIds();
-
-      if (collectionIds.length > 0) {
-        definitions = await PropertyDefinition.findAll({
+    const definitions = await (user.isAdmin
+      ? PropertyDefinition.findAll({
           where: {
-            collectionId: collectionIds,
             teamId: user.teamId,
+            deletedAt: null,
           },
-          include: definitionIncludes(user.id),
-          order: [
-            ["createdAt", "ASC"],
-            [
-              { model: PropertyDefinitionOption, as: "options" },
-              "index",
-              "ASC",
-            ],
-            [
-              { model: PropertyDefinitionOption, as: "options" },
-              "createdAt",
-              "ASC",
-            ],
-          ],
-        });
-      }
-    }
+          include: definitionIncludes(),
+          order: [["name", "ASC"]],
+        })
+      : listDefinitionsForAccessibleCollections(user));
+    const usageCounts = user.isAdmin
+      ? await listDefinitionUsageCounts(user.teamId)
+      : new Map<string, number>();
 
     ctx.body = {
       data: definitions.map((definition) =>
-        presentPropertyDefinition(definition)
+        presentPropertyDefinition(definition, {
+          usageCount: usageCounts.get(definition.id) ?? 0,
+        })
       ),
       policies: presentPolicies(user, definitions),
     };
@@ -196,30 +225,26 @@ router.post(
   validate(T.PropertyDefinitionsCreateSchema),
   transaction(),
   async (ctx: APIContext<T.PropertyDefinitionsCreateReq>) => {
-    const { collectionId, name, description, type, required, options } =
-      ctx.input.body;
+    const { name, description, type, options } = ctx.input.body;
     const { user } = ctx.state.auth;
     const { transaction } = ctx.state;
 
-    const collection = await Collection.findByPk(collectionId, {
-      userId: user.id,
-      rejectOnEmpty: true,
-      transaction,
-    });
-    authorize(user, "createPropertyDefinition", collection);
-
+    authorize(user, "update", user.team);
     assertOptionsSupported(type, options.length > 0);
 
-    const definition = await PropertyDefinition.createWithCtx(ctx, {
-      collectionId,
-      teamId: user.teamId,
-      name,
-      description: description ?? null,
-      type,
-      required,
-      createdById: user.id,
-      lastModifiedById: user.id,
-    });
+    let definition: PropertyDefinition;
+    try {
+      definition = await PropertyDefinition.createWithCtx(ctx, {
+        teamId: user.teamId,
+        name: normalizeDefinitionName(name),
+        description: description ?? null,
+        type,
+        createdById: user.id,
+        lastModifiedById: user.id,
+      });
+    } catch (error) {
+      rethrowDuplicateDefinitionError(error);
+    }
 
     if (options.length > 0) {
       await syncDefinitionOptions(ctx, definition, options);
@@ -230,15 +255,7 @@ router.post(
         id: definition.id,
       },
       transaction,
-      include: definitionIncludes(user.id),
-      order: [
-        [{ model: PropertyDefinitionOption, as: "options" }, "index", "ASC"],
-        [
-          { model: PropertyDefinitionOption, as: "options" },
-          "createdAt",
-          "ASC",
-        ],
-      ],
+      include: definitionIncludes(),
     });
 
     if (!reloaded) {
@@ -258,7 +275,7 @@ router.post(
   validate(T.PropertyDefinitionsUpdateSchema),
   transaction(),
   async (ctx: APIContext<T.PropertyDefinitionsUpdateReq>) => {
-    const { id, name, description, required, options } = ctx.input.body;
+    const { id, name, description, options } = ctx.input.body;
     const { user } = ctx.state.auth;
     const { transaction } = ctx.state;
 
@@ -268,7 +285,7 @@ router.post(
         teamId: user.teamId,
       },
       transaction,
-      include: definitionIncludes(user.id),
+      include: definitionIncludes(),
     });
 
     if (!definition) {
@@ -277,24 +294,20 @@ router.post(
     authorize(user, "update", definition);
 
     if (name !== undefined) {
-      definition.name = name;
+      definition.name = normalizeDefinitionName(name);
     }
 
     if (description !== undefined) {
       definition.description = description ?? null;
     }
 
-    if (required !== undefined) {
-      definition.required = required;
-    }
-
-    if (
-      name !== undefined ||
-      description !== undefined ||
-      required !== undefined
-    ) {
+    if (name !== undefined || description !== undefined) {
       definition.lastModifiedById = user.id;
-      await definition.saveWithCtx(ctx);
+      try {
+        await definition.saveWithCtx(ctx);
+      } catch (error) {
+        rethrowDuplicateDefinitionError(error);
+      }
     }
 
     if (options !== undefined) {
@@ -307,23 +320,20 @@ router.post(
         id: definition.id,
       },
       transaction,
-      include: definitionIncludes(user.id),
-      order: [
-        [{ model: PropertyDefinitionOption, as: "options" }, "index", "ASC"],
-        [
-          { model: PropertyDefinitionOption, as: "options" },
-          "createdAt",
-          "ASC",
-        ],
-      ],
+      include: definitionIncludes(),
     });
 
     if (!reloaded) {
       throw NotFoundError();
     }
 
-    if (name !== undefined || options !== undefined) {
-      await syncDocumentPropertiesForDefinition(ctx, reloaded);
+    if (options !== undefined) {
+      transaction.afterCommit(() => {
+        void new ReconcileDocumentPropertyOptionsTask().schedule({
+          propertyDefinitionId: reloaded.id,
+          userId: user.id,
+        });
+      });
     }
 
     ctx.body = {
@@ -349,7 +359,7 @@ router.post(
         teamId: user.teamId,
       },
       transaction,
-      include: definitionIncludes(user.id),
+      include: definitionIncludes(),
     });
 
     if (!definition) {
@@ -365,7 +375,12 @@ router.post(
       },
       transaction,
     });
-
+    await CollectionPropertyDefinition.destroy({
+      where: {
+        propertyDefinitionId: definition.id,
+      },
+      transaction,
+    });
     await DocumentProperty.destroy({
       where: {
         propertyDefinitionId: definition.id,
@@ -376,11 +391,10 @@ router.post(
     await sequelize.query(
       `UPDATE documents
        SET properties = COALESCE(properties, '{}'::jsonb) - :propertyDefinitionId
-       WHERE "collectionId" = :collectionId`,
+       WHERE COALESCE(properties, '{}'::jsonb) ? :propertyDefinitionId`,
       {
         replacements: {
           propertyDefinitionId: definition.id,
-          collectionId: definition.collectionId,
         },
         transaction,
       }

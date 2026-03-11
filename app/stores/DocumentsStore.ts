@@ -7,6 +7,7 @@ import { observable, action, computed, runInAction } from "mobx";
 import type {
   DirectionFilter,
   DocumentPropertyFilter,
+  DocumentPropertyValues,
   SortFilter,
 } from "@shared/types";
 import {
@@ -54,6 +55,14 @@ export type SearchParams = {
 type ImportOptions = {
   publish?: boolean;
 };
+
+export interface DocumentMovePreview {
+  preservedPropertyDefinitionIds: string[];
+  droppedPropertyDefinitionIds: string[];
+  droppedPropertyNames: string[];
+  canAttachToDestination: boolean;
+  attachCandidates: string[];
+}
 
 export default class DocumentsStore extends Store<Document> {
   @observable
@@ -432,8 +441,6 @@ export default class DocumentsStore extends Store<Document> {
         ...options,
         propertyFilters: options?.propertyFilters?.map((propertyFilter) => ({
           propertyDefinitionId: propertyFilter.propertyDefinitionId,
-          propertyName: propertyFilter.propertyName,
-          propertyType: propertyFilter.propertyType,
           operator: propertyFilter.operator,
           value: propertyFilter.value,
         })),
@@ -473,8 +480,6 @@ export default class DocumentsStore extends Store<Document> {
         ...options,
         propertyFilters: options?.propertyFilters?.map((propertyFilter) => ({
           propertyDefinitionId: propertyFilter.propertyDefinitionId,
-          propertyName: propertyFilter.propertyName,
-          propertyType: propertyFilter.propertyType,
           operator: propertyFilter.operator,
           value: propertyFilter.value,
         })),
@@ -548,6 +553,32 @@ export default class DocumentsStore extends Store<Document> {
     return this.data.get(res.data.id);
   };
 
+  @action
+  updateProperties = async ({
+    id,
+    properties,
+  }: {
+    id: string;
+    properties: DocumentPropertyValues;
+  }): Promise<Document> => {
+    const res = await client.post("/documents.updateProperties", {
+      id,
+      properties,
+    });
+    invariant(res?.data, "Document property update not available");
+
+    return runInAction("DocumentsStore#updateProperties", () => {
+      this.add({
+        id,
+        properties: res.data.properties,
+      });
+
+      const document = this.get(id);
+      invariant(document, "Document not available");
+      return document;
+    });
+  };
+
   override fetch = (id: string, options: FetchOptions = {}) =>
     super.fetch(
       id,
@@ -557,16 +588,39 @@ export default class DocumentsStore extends Store<Document> {
     );
 
   @action
+  movePreview = async ({
+    documentId,
+    collectionId,
+    parentDocumentId,
+  }: {
+    documentId: string;
+    collectionId?: string | null;
+    parentDocumentId?: string | null;
+  }): Promise<DocumentMovePreview> => {
+    const res = await client.post("/documents.movePreview", {
+      id: documentId,
+      collectionId,
+      parentDocumentId,
+    });
+    invariant(res?.data, "Move preview not available");
+    return res.data;
+  };
+
+  @action
   move = async ({
     documentId,
     collectionId,
     parentDocumentId,
     index,
+    confirmPropertyDrops,
+    attachPropertyDefinitionIds,
   }: {
     documentId: string;
     collectionId?: string | null;
     parentDocumentId?: string | null;
     index?: number | null;
+    confirmPropertyDrops?: boolean;
+    attachPropertyDefinitionIds?: string[];
   }) => {
     this.movingDocumentId = documentId;
 
@@ -576,6 +630,8 @@ export default class DocumentsStore extends Store<Document> {
         collectionId,
         parentDocumentId,
         index,
+        confirmPropertyDrops,
+        attachPropertyDefinitionIds,
       });
       invariant(res?.data, "Data not available");
       res.data.documents.forEach(this.add);

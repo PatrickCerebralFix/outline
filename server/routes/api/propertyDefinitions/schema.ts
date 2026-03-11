@@ -19,9 +19,7 @@ const BaseIdSchema = z.object({
 });
 
 export const PropertyDefinitionsListSchema = BaseSchema.extend({
-  body: z.object({
-    collectionId: z.string().uuid().optional(),
-  }),
+  body: z.object({}),
 });
 
 export type PropertyDefinitionsListReq = z.infer<
@@ -30,11 +28,9 @@ export type PropertyDefinitionsListReq = z.infer<
 
 export const PropertyDefinitionsCreateSchema = BaseSchema.extend({
   body: z.object({
-    collectionId: z.string().uuid(),
-    name: z.string().min(1).max(255),
+    name: z.string().trim().min(1).max(255),
     description: z.string().max(2000).nullish(),
     type: z.nativeEnum(DocumentPropertyType),
-    required: z.boolean().default(false),
     options: z.array(PropertyDefinitionOptionInputSchema).default([]),
   }),
 });
@@ -45,16 +41,14 @@ export type PropertyDefinitionsCreateReq = z.infer<
 
 export const PropertyDefinitionsUpdateSchema = BaseSchema.extend({
   body: BaseIdSchema.extend({
-    name: z.string().min(1).max(255).optional(),
+    name: z.string().trim().min(1).max(255).optional(),
     description: z.string().max(2000).nullish(),
-    required: z.boolean().optional(),
     options: z.array(PropertyDefinitionOptionInputSchema).optional(),
   }),
 }).refine(
   (req) =>
     req.body.name !== undefined ||
     req.body.description !== undefined ||
-    req.body.required !== undefined ||
     req.body.options !== undefined,
   {
     message: "At least one field must be provided to update",

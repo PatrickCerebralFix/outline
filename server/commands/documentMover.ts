@@ -2,7 +2,7 @@ import { Transaction } from "sequelize";
 import { traceFunction } from "@server/logging/tracing";
 import { Document, Collection, Pin } from "@server/models";
 import type { APIContext } from "@server/types";
-import { clearDocumentProperties } from "./documentPropertyUpdater";
+import { pruneDocumentPropertiesToDefinitionIds } from "@server/utils/collectionPropertyDefinitions";
 
 type Props = {
   /** Document which is being moved */
@@ -13,6 +13,8 @@ type Props = {
   parentDocumentId?: string | null;
   /** Position of moved document within document structure */
   index?: number;
+  /** Property definitions that remain valid after the move. */
+  keepPropertyDefinitionIds?: string[];
 };
 
 type Result = {
@@ -29,6 +31,7 @@ async function documentMover(
     parentDocumentId = null,
     // convert undefined to null so parentId comparison treats them as equal
     index,
+    keepPropertyDefinitionIds = [],
   }: Props
 ): Promise<Result> {
   const { user } = ctx.state.auth;
@@ -174,10 +177,16 @@ async function documentMover(
         );
       }
 
-      // Properties are collection-scoped, so moving across collections or to drafts
-      // requires clearing them from both normalized and denormalized storage.
-      document.properties = {};
-      await clearDocumentProperties(movedDocumentIds, transaction);
+      document.properties = Object.fromEntries(
+        Object.entries(document.properties ?? {}).filter(([definitionId]) =>
+          keepPropertyDefinitionIds.includes(definitionId)
+        )
+      );
+      await pruneDocumentPropertiesToDefinitionIds(
+        movedDocumentIds,
+        keepPropertyDefinitionIds,
+        transaction
+      );
 
       // We must reload from the database to get the relationship data
       const documents = await Document.findAll({

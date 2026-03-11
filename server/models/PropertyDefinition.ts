@@ -11,6 +11,7 @@ import {
   Table,
   Length as SimpleLength,
 } from "sequelize-typescript";
+import CollectionPropertyDefinition from "./CollectionPropertyDefinition";
 import Collection from "./Collection";
 import DocumentProperty from "./DocumentProperty";
 import Team from "./Team";
@@ -52,7 +53,7 @@ class PropertyDefinition extends ParanoidModel<
 
   @ForeignKey(() => Collection)
   @Column(DataType.UUID)
-  collectionId: string;
+  collectionId: string | null;
 
   @BelongsTo(() => Team, "teamId")
   team: Team;
@@ -80,6 +81,9 @@ class PropertyDefinition extends ParanoidModel<
 
   @HasMany(() => DocumentProperty)
   documentProperties: DocumentProperty[];
+
+  @HasMany(() => CollectionPropertyDefinition)
+  collectionPropertyDefinitions: CollectionPropertyDefinition[];
 }
 
 export default PropertyDefinition;

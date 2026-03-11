@@ -68,10 +68,24 @@ export default async function documentUpdater(
 ): Promise<Document> {
   const { user } = ctx.state.auth;
   const { transaction } = ctx.state;
-  const cId = collectionId || document.collectionId;
+  const targetCollectionId =
+    publish && collectionId !== undefined
+      ? collectionId
+      : document.collectionId;
   let propertyUpdatePlan:
     | Awaited<ReturnType<typeof prepareDocumentPropertyUpdate>>
     | undefined;
+
+  if (properties !== undefined) {
+    document = await Document.unscoped().findOne({
+      where: {
+        id: document.id,
+      },
+      rejectOnEmpty: true,
+      transaction,
+      lock: transaction.LOCK.UPDATE,
+    });
+  }
 
   if (title !== undefined) {
     document.title = title.trim();
@@ -103,16 +117,14 @@ export default async function documentUpdater(
       editMode
     );
   }
-  const propertiesToApply = properties ?? {};
-
-  if (cId || properties !== undefined) {
+  if (properties !== undefined) {
     propertyUpdatePlan = await prepareDocumentPropertyUpdate(
       ctx,
       document,
-      propertiesToApply,
+      properties,
       {
-        collectionId: cId,
-        strict: properties !== undefined,
+        collectionId: targetCollectionId,
+        strict: true,
       }
     );
     document.properties = propertyUpdatePlan.properties;
@@ -124,15 +136,18 @@ export default async function documentUpdater(
   const event = {
     name: "documents.update",
     documentId: document.id,
-    collectionId: cId,
+    collectionId: document.collectionId ?? targetCollectionId,
     data: eventData,
   };
 
-  if (publish && (document.template || cId)) {
+  if (publish && (document.template || targetCollectionId)) {
     if (!document.collectionId) {
-      document.collectionId = cId;
+      document.collectionId = targetCollectionId;
     }
-    await document.publish(ctx, { collectionId: cId, data: eventData });
+    await document.publish(ctx, {
+      collectionId: targetCollectionId,
+      data: eventData,
+    });
   } else if (changed) {
     document.lastModifiedById = user.id;
     document.updatedBy = user;

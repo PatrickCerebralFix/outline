@@ -1,20 +1,17 @@
 import JSZip from "jszip";
 import omit from "lodash/omit";
-import type { NavigationNode } from "@shared/types";
+import type { DocumentPropertyValues, NavigationNode } from "@shared/types";
+import { DocumentPropertyType } from "@shared/types";
 import env from "@server/env";
 import Logger from "@server/logging/Logger";
 import type { Collection, FileOperation } from "@server/models";
-import {
-  Attachment,
-  Document,
-  PropertyDefinition,
-  PropertyDefinitionOption,
-} from "@server/models";
+import { Attachment, Document, User } from "@server/models";
 import { DocumentHelper } from "@server/models/helpers/DocumentHelper";
 import { ProsemirrorHelper } from "@server/models/helpers/ProsemirrorHelper";
 import { presentAttachment, presentCollection } from "@server/presenters";
 import type { CollectionJSONExport, JSONExportMetadata } from "@server/types";
 import { toDocumentPropertyValues } from "@server/utils/documentProperties";
+import { resolveCollectionPropertyDefinitions } from "@server/utils/collectionPropertyDefinitions";
 import ZipHelper from "@server/utils/ZipHelper";
 import { serializeFilename } from "@server/utils/fs";
 import packageJson from "../../../package.json";
@@ -83,41 +80,50 @@ export default class ExportJSONTask extends ExportTask {
         ]) as CollectionJSONExport["collection"]),
         documentStructure: collection.documentStructure,
       },
+      propertyDefinitions: [],
+      collectionPropertyDefinitions: [],
       documents: {},
       attachments: {},
     };
 
-    const propertyDefinitions = await PropertyDefinition.findAll({
-      where: {
-        collectionId: collection.id,
-      },
-      include: [
-        {
-          association: "options",
-          required: false,
-        },
-      ],
-      order: [
-        ["createdAt", "ASC"],
-        [{ model: PropertyDefinitionOption, as: "options" }, "index", "ASC"],
-      ],
-    });
+    const resolvedProperties = await resolveCollectionPropertyDefinitions(
+      collection.id,
+      collection.teamId
+    );
+    const propertyDefinitions = resolvedProperties.effective.map(
+      (row) => row.definition
+    );
 
-    output.collection.propertyDefinitions = propertyDefinitions.map(
+    const propertyDefinitionTypeById = new Map(
+      propertyDefinitions.map((definition) => [definition.id, definition.type])
+    );
+    const userEmailById = new Map<string, string>();
+
+    output.propertyDefinitions = propertyDefinitions.map(
       (definition) => ({
         id: definition.id,
         name: definition.name,
         description: definition.description,
         type: definition.type,
-        required: definition.required,
-        options:
-          definition.options?.map((option) => ({
+        options: [...(definition.options ?? [])]
+          .sort((a, b) => `${a.index ?? ""}`.localeCompare(`${b.index ?? ""}`))
+          .map((option) => ({
             id: option.id,
             label: option.label,
             value: option.value,
             color: option.color,
             index: option.index,
-          })) ?? [],
+          })),
+      })
+    );
+    output.collectionPropertyDefinitions = resolvedProperties.effective.map(
+      (row) => ({
+        id: row.id,
+        propertyDefinitionId: row.propertyDefinitionId,
+        state: row.state,
+        required: row.required,
+        inheritToChildren: row.inheritToChildren,
+        index: row.index,
       })
     );
 
@@ -150,7 +156,7 @@ export default class ExportJSONTask extends ExportTask {
       );
     }
 
-    async function addDocumentTree(nodes: NavigationNode[]) {
+    const addDocumentTree = async (nodes: NavigationNode[]) => {
       for (const node of nodes) {
         const document = await Document.findByPk(node.id, {
           includeState: true,
@@ -191,14 +197,19 @@ export default class ExportJSONTask extends ExportTask {
           fullWidth: document.fullWidth,
           template: document.template,
           parentDocumentId: document.parentDocumentId,
-          properties: toDocumentPropertyValues(document.properties ?? {}),
+          properties: await this.serializeDocumentProperties(
+            toDocumentPropertyValues(document.properties ?? {}),
+            propertyDefinitionTypeById,
+            document.teamId,
+            userEmailById
+          ),
         };
 
         if (node.children?.length > 0) {
           await addDocumentTree(node.children);
         }
       }
-    }
+    };
 
     const collectionAttachments = includeAttachments
       ? await Attachment.findAll({
@@ -227,5 +238,79 @@ export default class ExportJSONTask extends ExportTask {
 
   public async exportDocument(): Promise<string> {
     throw new Error("JSON export unsupported for individual document.");
+  }
+
+  private async serializeDocumentProperties(
+    properties: DocumentPropertyValues,
+    propertyDefinitionTypeById: Map<string, DocumentPropertyType>,
+    teamId: string,
+    userEmailById: Map<string, string>
+  ): Promise<DocumentPropertyValues> {
+    const missingUserIds = new Set<string>();
+
+    for (const [propertyDefinitionId, rawValue] of Object.entries(properties)) {
+      if (
+        propertyDefinitionTypeById.get(propertyDefinitionId) !==
+        DocumentPropertyType.User
+      ) {
+        continue;
+      }
+
+      if (!Array.isArray(rawValue)) {
+        continue;
+      }
+
+      for (const value of rawValue) {
+        if (typeof value === "string" && !userEmailById.has(value)) {
+          missingUserIds.add(value);
+        }
+      }
+    }
+
+    if (missingUserIds.size > 0) {
+      const users = await User.findAll({
+        attributes: ["id", "email"],
+        where: {
+          teamId,
+          id: Array.from(missingUserIds),
+        },
+      });
+
+      for (const user of users) {
+        if (user.email) {
+          userEmailById.set(user.id, user.email);
+        }
+      }
+    }
+
+    return Object.fromEntries(
+      Object.entries(properties).map(([propertyDefinitionId, rawValue]) => {
+        if (
+          propertyDefinitionTypeById.get(propertyDefinitionId) !==
+          DocumentPropertyType.User
+        ) {
+          return [propertyDefinitionId, rawValue];
+        }
+
+        if (!Array.isArray(rawValue)) {
+          return [propertyDefinitionId, rawValue];
+        }
+
+        const emails = rawValue.flatMap((value) => {
+          if (typeof value !== "string") {
+            return [];
+          }
+
+          const email = userEmailById.get(value);
+          if (!email) {
+            return [];
+          }
+
+          return [email];
+        });
+
+        return [propertyDefinitionId, emails];
+      })
+    );
   }
 }

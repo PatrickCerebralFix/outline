@@ -38,7 +38,7 @@ export const PropertyFiltersSection = observer(
     }, [propertyDefinitions]);
 
     const hasActiveFilter = useMemo(
-      () => filters.some((f) => !!f.propertyName),
+      () => filters.some((f) => !!f.propertyDefinitionId),
       [filters]
     );
 
@@ -48,8 +48,7 @@ export const PropertyFiltersSection = observer(
           <PropertyFilter
             key={index}
             index={index}
-            propertyName={filter.propertyName}
-            propertyType={filter.propertyType}
+            propertyDefinitionId={filter.propertyDefinitionId}
             operator={filter.operator}
             value={filter.value}
             onChange={onChange}

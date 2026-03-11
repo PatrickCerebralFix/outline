@@ -1,11 +1,14 @@
 import { DocumentPropertyType } from "@shared/types";
+import { reconcileDocumentPropertyOptions } from "@server/commands/documentPropertyUpdater";
 import {
   Document,
   DocumentProperty,
   PropertyDefinition,
   PropertyDefinitionOption,
 } from "@server/models";
+import ReconcileDocumentPropertyOptionsTask from "@server/queues/tasks/ReconcileDocumentPropertyOptionsTask";
 import {
+  buildAdmin,
   buildCollection,
   buildDocument,
   buildUser,
@@ -14,9 +17,13 @@ import { getTestServer } from "@server/test/support";
 
 const server = getTestServer();
 
+afterEach(() => {
+  jest.restoreAllMocks();
+});
+
 describe("#propertyDefinitions.update", () => {
   it("creates and deletes a definition without group memberships", async () => {
-    const user = await buildUser();
+    const user = await buildAdmin();
     const collection = await buildCollection({
       userId: user.id,
       teamId: user.teamId,
@@ -25,11 +32,9 @@ describe("#propertyDefinitions.update", () => {
     const createRes = await server.post("/api/propertyDefinitions.create", {
       body: {
         token: user.getJwtToken(),
-        collectionId: collection.id,
         name: "Priority",
         description: null,
         type: DocumentPropertyType.Text,
-        required: false,
         options: [],
       },
     });
@@ -49,8 +54,107 @@ describe("#propertyDefinitions.update", () => {
     expect(deleteBody.success).toEqual(true);
   });
 
-  it("updates denormalized snapshot metadata for selected options", async () => {
-    const user = await buildUser();
+  it("allows duplicate definitions with the same trimmed name and type", async () => {
+    const user = await buildAdmin();
+    const collection = await buildCollection({
+      userId: user.id,
+      teamId: user.teamId,
+    });
+
+    await PropertyDefinition.create({
+      collectionId: collection.id,
+      teamId: user.teamId,
+      name: "Priority",
+      description: null,
+      type: DocumentPropertyType.Text,
+      required: false,
+      createdById: user.id,
+      lastModifiedById: user.id,
+    });
+
+    const res = await server.post("/api/propertyDefinitions.create", {
+      body: {
+        token: user.getJwtToken(),
+        name: "  Priority  ",
+        description: null,
+        type: DocumentPropertyType.Text,
+        options: [],
+      },
+    });
+
+    expect(res.status).toEqual(200);
+
+    const definitions = await PropertyDefinition.findAll({
+      where: {
+        teamId: user.teamId,
+        type: DocumentPropertyType.Text,
+      },
+    });
+
+    expect(
+      definitions.filter(
+        (definition) => definition.name.trim() === "Priority"
+      )
+    ).toHaveLength(2);
+  });
+
+  it("does not enqueue reconciliation for name-only updates", async () => {
+    const user = await buildAdmin();
+    const collection = await buildCollection({
+      userId: user.id,
+      teamId: user.teamId,
+    });
+    const definition = await PropertyDefinition.create({
+      collectionId: collection.id,
+      teamId: user.teamId,
+      name: "Status",
+      description: null,
+      type: DocumentPropertyType.Select,
+      required: false,
+      createdById: user.id,
+      lastModifiedById: user.id,
+    });
+    const schedule = jest
+      .spyOn(ReconcileDocumentPropertyOptionsTask.prototype, "schedule")
+      .mockResolvedValue({} as never);
+
+    const res = await server.post("/api/propertyDefinitions.update", {
+      body: {
+        token: user.getJwtToken(),
+        id: definition.id,
+        name: "Lifecycle",
+      },
+    });
+
+    expect(res.status).toEqual(200);
+    expect(schedule).not.toHaveBeenCalled();
+  });
+
+  it("rejects options for user properties", async () => {
+    const user = await buildAdmin();
+
+    const res = await server.post("/api/propertyDefinitions.create", {
+      body: {
+        token: user.getJwtToken(),
+        name: "Assignees",
+        description: null,
+        type: DocumentPropertyType.User,
+        options: [
+          {
+            label: "Ignored",
+            value: "ignored",
+            color: null,
+            index: "0",
+          },
+        ],
+      },
+    });
+
+    expect(res.status).toEqual(400);
+  });
+
+  it("enqueues reconciliation when selectable options change", async () => {
+    const user = await buildAdmin();
     const collection = await buildCollection({
       userId: user.id,
       teamId: user.teamId,
@@ -68,55 +172,26 @@ describe("#propertyDefinitions.update", () => {
     const option = await PropertyDefinitionOption.create({
       propertyDefinitionId: definition.id,
       teamId: user.teamId,
-      label: "In progress",
-      value: "In progress",
+      label: "Todo",
+      value: "Todo",
       color: "#111111",
       index: "0",
       createdById: user.id,
       lastModifiedById: user.id,
     });
-    const document = await buildDocument({
-      userId: user.id,
-      teamId: user.teamId,
-      collectionId: collection.id,
-    });
-
-    await DocumentProperty.create({
-      documentId: document.id,
-      propertyDefinitionId: definition.id,
-      value: option.id,
-      teamId: user.teamId,
-      createdById: user.id,
-      lastModifiedById: user.id,
-    });
-
-    document.properties = {
-      [definition.id]: {
-        definitionId: definition.id,
-        name: "Status",
-        type: DocumentPropertyType.Select,
-        value: option.id,
-        options: [
-          {
-            id: option.id,
-            value: option.value,
-            color: option.color,
-          },
-        ],
-      },
-    };
-    await document.save();
+    const schedule = jest
+      .spyOn(ReconcileDocumentPropertyOptionsTask.prototype, "schedule")
+      .mockResolvedValue({} as never);
 
     const res = await server.post("/api/propertyDefinitions.update", {
       body: {
         token: user.getJwtToken(),
         id: definition.id,
-        name: "Lifecycle",
         options: [
           {
             id: option.id,
-            label: "Done",
-            value: "Completed",
+            label: "In progress",
+            value: "In progress",
             color: "#00FF00",
             index: "0",
           },
@@ -125,31 +200,15 @@ describe("#propertyDefinitions.update", () => {
     });
 
     expect(res.status).toEqual(200);
-
-    const refreshedDocument = await Document.unscoped().findByPk(document.id, {
-      rejectOnEmpty: true,
+    expect(schedule).toHaveBeenCalledWith({
+      propertyDefinitionId: definition.id,
+      userId: user.id,
     });
-    const refreshedProperty = refreshedDocument.properties[definition.id];
-    const refreshedRow = await DocumentProperty.findOne({
-      where: {
-        documentId: document.id,
-        propertyDefinitionId: definition.id,
-      },
-      rejectOnEmpty: true,
-    });
-
-    expect(refreshedProperty.name).toEqual("Lifecycle");
-    expect(refreshedProperty.options).toEqual([
-      {
-        id: option.id,
-        value: "Completed",
-        color: "#00FF00",
-      },
-    ]);
-    expect(refreshedRow.value).toEqual(option.id);
   });
+});
 
-  it("removes stale select values when selected option is deleted", async () => {
+describe("reconcileDocumentPropertyOptions", () => {
+  it("removes stale select values when the selected option is deleted", async () => {
     const user = await buildUser();
     const collection = await buildCollection({
       userId: user.id,
@@ -165,23 +224,13 @@ describe("#propertyDefinitions.update", () => {
       createdById: user.id,
       lastModifiedById: user.id,
     });
-    const remaining = await PropertyDefinitionOption.create({
-      propertyDefinitionId: definition.id,
-      teamId: user.teamId,
-      label: "Todo",
-      value: "Todo",
-      color: "#555555",
-      index: "0",
-      createdById: user.id,
-      lastModifiedById: user.id,
-    });
     const removed = await PropertyDefinitionOption.create({
       propertyDefinitionId: definition.id,
       teamId: user.teamId,
       label: "Done",
       value: "Done",
       color: "#00FF00",
-      index: "1",
+      index: "0",
       createdById: user.id,
       lastModifiedById: user.id,
     });
@@ -189,6 +238,9 @@ describe("#propertyDefinitions.update", () => {
       userId: user.id,
       teamId: user.teamId,
       collectionId: collection.id,
+      properties: {
+        [definition.id]: removed.id,
+      },
     });
 
     await DocumentProperty.create({
@@ -200,40 +252,11 @@ describe("#propertyDefinitions.update", () => {
       lastModifiedById: user.id,
     });
 
-    document.properties = {
-      [definition.id]: {
-        definitionId: definition.id,
-        name: definition.name,
-        type: definition.type,
-        value: removed.id,
-        options: [
-          {
-            id: removed.id,
-            value: removed.value,
-            color: removed.color,
-          },
-        ],
-      },
-    };
-    await document.save();
-
-    const res = await server.post("/api/propertyDefinitions.update", {
-      body: {
-        token: user.getJwtToken(),
-        id: definition.id,
-        options: [
-          {
-            id: remaining.id,
-            label: remaining.label,
-            value: remaining.value,
-            color: remaining.color,
-            index: "0",
-          },
-        ],
-      },
+    await removed.destroy();
+    await reconcileDocumentPropertyOptions({
+      propertyDefinitionId: definition.id,
+      userId: user.id,
     });
-
-    expect(res.status).toEqual(200);
 
     const refreshedDocument = await Document.unscoped().findByPk(document.id, {
       rejectOnEmpty: true,
@@ -246,9 +269,72 @@ describe("#propertyDefinitions.update", () => {
     });
 
     expect(refreshedRow).toBeNull();
-    expect(Object.keys(refreshedDocument.properties)).not.toContain(
-      definition.id
-    );
+    expect(refreshedDocument.properties[definition.id]).toBeUndefined();
+  });
+
+  it("hydrates required select values to an empty string when the option is deleted", async () => {
+    const user = await buildUser();
+    const collection = await buildCollection({
+      userId: user.id,
+      teamId: user.teamId,
+    });
+    const definition = await PropertyDefinition.create({
+      collectionId: collection.id,
+      teamId: user.teamId,
+      name: "Status",
+      description: null,
+      type: DocumentPropertyType.Select,
+      required: true,
+      createdById: user.id,
+      lastModifiedById: user.id,
+    });
+    const removed = await PropertyDefinitionOption.create({
+      propertyDefinitionId: definition.id,
+      teamId: user.teamId,
+      label: "Done",
+      value: "Done",
+      color: "#00FF00",
+      index: "0",
+      createdById: user.id,
+      lastModifiedById: user.id,
+    });
+    const document = await buildDocument({
+      userId: user.id,
+      teamId: user.teamId,
+      collectionId: collection.id,
+      properties: {
+        [definition.id]: removed.id,
+      },
+    });
+
+    await DocumentProperty.create({
+      documentId: document.id,
+      propertyDefinitionId: definition.id,
+      value: removed.id,
+      teamId: user.teamId,
+      createdById: user.id,
+      lastModifiedById: user.id,
+    });
+
+    await removed.destroy();
+    await reconcileDocumentPropertyOptions({
+      propertyDefinitionId: definition.id,
+      userId: user.id,
+    });
+
+    const refreshedDocument = await Document.unscoped().findByPk(document.id, {
+      rejectOnEmpty: true,
+    });
+    const refreshedRow = await DocumentProperty.findOne({
+      where: {
+        documentId: document.id,
+        propertyDefinitionId: definition.id,
+      },
+      rejectOnEmpty: true,
+    });
+
+    expect(refreshedRow.value).toEqual("");
+    expect(refreshedDocument.properties[definition.id]).toEqual("");
   });
 
   it("filters stale multi-select option IDs and keeps valid values", async () => {
@@ -291,6 +377,9 @@ describe("#propertyDefinitions.update", () => {
       userId: user.id,
       teamId: user.teamId,
       collectionId: collection.id,
+      properties: {
+        [definition.id]: [remaining.id, removed.id],
+      },
     });
 
     await DocumentProperty.create({
@@ -302,50 +391,15 @@ describe("#propertyDefinitions.update", () => {
       lastModifiedById: user.id,
     });
 
-    document.properties = {
-      [definition.id]: {
-        definitionId: definition.id,
-        name: definition.name,
-        type: definition.type,
-        value: [remaining.id, removed.id],
-        options: [
-          {
-            id: remaining.id,
-            value: remaining.value,
-            color: remaining.color,
-          },
-          {
-            id: removed.id,
-            value: removed.value,
-            color: removed.color,
-          },
-        ],
-      },
-    };
-    await document.save();
-
-    const res = await server.post("/api/propertyDefinitions.update", {
-      body: {
-        token: user.getJwtToken(),
-        id: definition.id,
-        options: [
-          {
-            id: remaining.id,
-            label: "Pinned",
-            value: "Pinned",
-            color: "#CC0000",
-            index: "0",
-          },
-        ],
-      },
+    await removed.destroy();
+    await reconcileDocumentPropertyOptions({
+      propertyDefinitionId: definition.id,
+      userId: user.id,
     });
-
-    expect(res.status).toEqual(200);
 
     const refreshedDocument = await Document.unscoped().findByPk(document.id, {
       rejectOnEmpty: true,
     });
-    const refreshedProperty = refreshedDocument.properties[definition.id];
     const refreshedRow = await DocumentProperty.findOne({
       where: {
         documentId: document.id,
@@ -355,13 +409,6 @@ describe("#propertyDefinitions.update", () => {
     });
 
     expect(refreshedRow.value).toEqual([remaining.id]);
-    expect(refreshedProperty.value).toEqual([remaining.id]);
-    expect(refreshedProperty.options).toEqual([
-      {
-        id: remaining.id,
-        value: "Pinned",
-        color: "#CC0000",
-      },
-    ]);
+    expect(refreshedDocument.properties[definition.id]).toEqual([remaining.id]);
   });
 });

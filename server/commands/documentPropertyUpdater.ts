@@ -1,22 +1,21 @@
-import type {
-  DocumentProperties,
-  DocumentPropertyOptionSnapshot,
-  DocumentPropertySnapshot,
-  JSONValue,
-} from "@shared/types";
+import type { DocumentProperties, DocumentPropertyValues, JSONValue } from "@shared/types";
+import { DocumentPropertyType } from "@shared/types";
 import { Op } from "sequelize";
 import type { Transaction } from "sequelize";
-import { DocumentPropertyType } from "@shared/types";
 import { ValidationError } from "@server/errors";
-import type { APIContext } from "@server/types";
-import { sequelize } from "@server/storage/database";
 import {
-  extractDocumentPropertyValue,
+  Document,
+  DocumentProperty,
+  PropertyDefinition,
+  User,
+} from "@server/models";
+import type { Document as DocumentModel } from "@server/models";
+import { sequelize } from "@server/storage/database";
+import type { APIContext } from "@server/types";
+import { resolveCollectionPropertyDefinitions } from "@server/utils/collectionPropertyDefinitions";
+import {
   toDocumentPropertyValues,
-  type DocumentPropertyLike,
 } from "@server/utils/documentProperties";
-import type { Document, PropertyDefinitionOption } from "@server/models";
-import { DocumentProperty, PropertyDefinition } from "@server/models";
 
 export interface DocumentPropertyInput {
   [propertyDefinitionId: string]: JSONValue | null | undefined;
@@ -38,6 +37,20 @@ export interface ApplyDocumentPropertyUpdateOptions {
    */
   replace?: boolean;
 }
+
+export interface ReconcileDocumentPropertyOptionsInput {
+  propertyDefinitionId: string;
+  userId: string;
+  batchSize?: number;
+}
+
+export interface ReconcileDocumentPropertyOptionsResult {
+  processedDocuments: number;
+  updatedDocuments: number;
+  deletedRows: number;
+  upsertedRows: number;
+}
+
 /**
  * Validates and prepares document property updates.
  *
@@ -49,7 +62,7 @@ export interface ApplyDocumentPropertyUpdateOptions {
  */
 export async function prepareDocumentPropertyUpdate(
   ctx: APIContext,
-  document: Document,
+  document: DocumentModel,
   inputProperties: DocumentPropertyInput,
   options?: {
     collectionId?: string | null;
@@ -58,7 +71,7 @@ export async function prepareDocumentPropertyUpdate(
 ): Promise<DocumentPropertyUpdatePlan> {
   const definitionIds = Object.keys(inputProperties);
   const mergedProperties: DocumentProperties = {
-    ...(document.properties ?? {}),
+    ...toDocumentPropertyValues(document.properties ?? {}),
   };
 
   const collectionId = options?.collectionId ?? document.collectionId;
@@ -78,42 +91,64 @@ export async function prepareDocumentPropertyUpdate(
   }
 
   const uniqueDefinitionIds = Array.from(new Set(definitionIds));
-  const definitions =
-    uniqueDefinitionIds.length > 0
-      ? await PropertyDefinition.findAll({
-          where: {
-            id: uniqueDefinitionIds,
-            collectionId,
-            teamId: document.teamId,
-          },
-          include: [
-            {
-              association: "options",
-              required: false,
-            },
-          ],
-          transaction: ctx.state.transaction,
-        })
-      : [];
-  const definitionById = new Map(definitions.map((d) => [d.id, d]));
+  const resolvedDefinitions = await resolveCollectionPropertyDefinitions(
+    collectionId,
+    document.teamId,
+    ctx.state.transaction
+  );
+  const definitionById = new Map(
+    resolvedDefinitions.effective.map((row) => [row.definition.id, row])
+  );
   const strict = options?.strict !== false;
 
-  if (strict && definitions.length !== uniqueDefinitionIds.length) {
+  if (
+    strict &&
+    uniqueDefinitionIds.some((propertyDefinitionId) => !definitionById.has(propertyDefinitionId))
+  ) {
     throw ValidationError("One or more document properties are invalid");
   }
 
   const upserts: DocumentPropertyUpdatePlan["upserts"] = [];
   const deletes: string[] = [];
+  const userDefinitionIds = new Set(
+    resolvedDefinitions.effective
+      .filter((row) => row.definition.type === DocumentPropertyType.User)
+      .map((row) => row.definition.id)
+  );
+  const referencedUserIds = Array.from(
+    new Set(
+      resolvedDefinitions.effective
+        .filter((row) => userDefinitionIds.has(row.definition.id))
+        .flatMap((row) => {
+          const inputValue = inputProperties[row.definition.id];
+          if (Array.isArray(inputValue)) {
+            return inputValue.filter(
+              (entry): entry is string => typeof entry === "string"
+            );
+          }
+
+          const storedValue = mergedProperties[row.definition.id];
+          return Array.isArray(storedValue)
+            ? storedValue.filter(
+                (entry): entry is string => typeof entry === "string"
+              )
+            : [];
+        })
+    )
+  );
+  const validUserIds = userDefinitionIds.size
+    ? await resolveTeamUserIds(document.teamId, referencedUserIds, ctx.state.transaction)
+    : new Set<string>();
 
   for (const propertyDefinitionId of uniqueDefinitionIds) {
-    const definition = definitionById.get(propertyDefinitionId);
+    const resolvedDefinition = definitionById.get(propertyDefinitionId);
     const inputValue = inputProperties[propertyDefinitionId];
 
     if (inputValue === undefined) {
       continue;
     }
 
-    if (!definition) {
+    if (!resolvedDefinition) {
       if (strict) {
         throw ValidationError(
           `Property definition not found: ${propertyDefinitionId}`
@@ -125,7 +160,11 @@ export async function prepareDocumentPropertyUpdate(
       continue;
     }
 
-    const normalized = normalizePropertyValue(definition, inputValue);
+    const normalized = normalizePropertyValue(
+      resolvedDefinition.definition,
+      inputValue,
+      validUserIds
+    );
 
     if (normalized === null) {
       delete mergedProperties[propertyDefinitionId];
@@ -133,48 +172,33 @@ export async function prepareDocumentPropertyUpdate(
       continue;
     }
 
-    mergedProperties[propertyDefinitionId] = createPropertySnapshot(
-      definition,
-      normalized
-    );
-    upserts.push({
+    mergedProperties[propertyDefinitionId] = normalized;
+    replaceUpsert(upserts, {
       propertyDefinitionId,
       value: normalized,
     });
   }
 
-  const requiredDefinitions = await PropertyDefinition.findAll({
-    where: {
-      collectionId,
-      teamId: document.teamId,
-      required: true,
-    },
-    include: [
-      {
-        association: "options",
-        required: false,
-      },
-    ],
-    transaction: ctx.state.transaction,
-  });
-
-  for (const definition of requiredDefinitions) {
-    const currentSnapshot = mergedProperties[
-      definition.id
-    ] as DocumentPropertyLike;
+  for (const resolvedDefinition of resolvedDefinitions.effective.filter(
+    (row) => row.required
+  )) {
+    const definition = resolvedDefinition.definition;
     const currentValue = sanitizeStoredPropertyValue(
       definition,
-      extractDocumentPropertyValue(currentSnapshot)
+      mergedProperties[definition.id],
+      validUserIds
     );
-
-    if (currentValue === null) {
-      addUnique(deletes, definition.id);
-    }
-
-    mergedProperties[definition.id] = createPropertySnapshot(
+    const hydratedValue = hydrateRequiredPropertyValue(
       definition,
       currentValue
     );
+
+    mergedProperties[definition.id] = hydratedValue;
+    removeValue(deletes, definition.id);
+    replaceUpsert(upserts, {
+      propertyDefinitionId: definition.id,
+      value: hydratedValue,
+    });
   }
 
   return {
@@ -192,7 +216,7 @@ export async function prepareDocumentPropertyUpdate(
  * @returns Normalized input map keyed by property definition ID.
  */
 export function toDocumentPropertyInput(
-  properties: Record<string, DocumentPropertyLike>
+  properties: DocumentPropertyValues
 ): DocumentPropertyInput {
   return toDocumentPropertyValues(properties);
 }
@@ -207,7 +231,7 @@ export function toDocumentPropertyInput(
  */
 export async function applyDocumentPropertyUpdate(
   ctx: APIContext,
-  document: Document,
+  document: DocumentModel,
   plan: DocumentPropertyUpdatePlan,
   options?: ApplyDocumentPropertyUpdateOptions
 ) {
@@ -272,8 +296,8 @@ export async function applyDocumentPropertyUpdate(
  * Clears all document properties (both the denormalized JSONB snapshot and
  * normalized rows) for the given document IDs within a transaction.
  *
- * @param documentIds - the IDs of the documents to clear.
- * @param transaction - the active Sequelize transaction.
+ * @param documentIds The IDs of the documents to clear.
+ * @param transaction The active Sequelize transaction.
  */
 export async function clearDocumentProperties(
   documentIds: string[],
@@ -296,161 +320,222 @@ export async function clearDocumentProperties(
 }
 
 /**
- * Synchronizes all document property snapshots and normalized rows for a
- * property definition after metadata changes (for example renaming a property
- * or modifying selectable options).
+ * Reconciles stored document property values for a selectable definition after
+ * its option set changes.
  *
- * @param ctx The request context.
- * @param definition The updated property definition.
+ * @param input Task input describing which definition to reconcile.
+ * @returns Counters describing the work performed.
  */
-export async function syncDocumentPropertiesForDefinition(
-  ctx: APIContext,
-  definition: PropertyDefinition
-) {
-  const { transaction } = ctx.state;
-  const { user } = ctx.state.auth;
-
-  const rows = await DocumentProperty.findAll({
+export async function reconcileDocumentPropertyOptions(
+  input: ReconcileDocumentPropertyOptionsInput
+): Promise<ReconcileDocumentPropertyOptionsResult> {
+  const { propertyDefinitionId, userId, batchSize = 100 } = input;
+  const definition = await PropertyDefinition.findOne({
     where: {
-      propertyDefinitionId: definition.id,
-      teamId: definition.teamId,
+      id: propertyDefinitionId,
     },
-    transaction,
+    include: [
+      {
+        association: "options",
+        required: false,
+      },
+    ],
   });
 
-  const rowsToDelete: string[] = [];
-  const rowsToUpsert: Array<{
-    id: string;
-    documentId: string;
-    propertyDefinitionId: string;
-    value: JSONValue;
-    teamId: string;
-    createdById: string;
-    lastModifiedById: string;
-  }> = [];
-  const snapshotsByDocumentId = new Map<string, DocumentPropertySnapshot>();
+  if (
+    !definition ||
+    (definition.type !== DocumentPropertyType.Select &&
+      definition.type !== DocumentPropertyType.MultiSelect)
+  ) {
+    return {
+      processedDocuments: 0,
+      updatedDocuments: 0,
+      deletedRows: 0,
+      upsertedRows: 0,
+    };
+  }
 
-  for (const row of rows) {
-    const normalized = sanitizeStoredPropertyValue(definition, row.value);
+  const result: ReconcileDocumentPropertyOptionsResult = {
+    processedDocuments: 0,
+    updatedDocuments: 0,
+    deletedRows: 0,
+    upsertedRows: 0,
+  };
+  let lastRowId: string | undefined;
 
-    if (normalized === null) {
-      rowsToDelete.push(row.id);
-      continue;
-    }
-
-    if (!isSameJSONValue(row.value, normalized)) {
-      rowsToUpsert.push({
-        id: row.id,
-        documentId: row.documentId,
-        propertyDefinitionId: row.propertyDefinitionId,
-        value: normalized,
-        teamId: row.teamId,
-        createdById: row.createdById,
-        lastModifiedById: user.id,
+  for (;;) {
+    const chunk = await sequelize.transaction(async (transaction) => {
+      const rows = await DocumentProperty.findAll({
+        where: {
+          propertyDefinitionId: definition.id,
+          teamId: definition.teamId,
+          ...(lastRowId
+            ? {
+                id: {
+                  [Op.gt]: lastRowId,
+                },
+              }
+            : {}),
+        },
+        order: [["id", "ASC"]],
+        limit: batchSize,
+        transaction,
+        lock: transaction.LOCK.UPDATE,
       });
+
+      if (rows.length === 0) {
+        return null;
+      }
+
+      const documentIds = Array.from(
+        new Set(rows.map((row) => row.documentId))
+      );
+      const documents = await Document.unscoped().findAll({
+        attributes: ["id", "properties"],
+        where: {
+          id: documentIds,
+        },
+        transaction,
+        lock: transaction.LOCK.UPDATE,
+        paranoid: false,
+      });
+      const documentsById = new Map(
+        documents.map((document) => [document.id, document])
+      );
+      const rowsToDelete: string[] = [];
+      const rowsToUpsert: Array<{
+        id: string;
+        documentId: string;
+        propertyDefinitionId: string;
+        value: JSONValue;
+        teamId: string;
+        createdById: string;
+        lastModifiedById: string;
+      }> = [];
+      const documentUpdates = new Map<string, DocumentProperties>();
+
+      for (const row of rows) {
+        const document = documentsById.get(row.documentId);
+
+        if (!document) {
+          rowsToDelete.push(row.id);
+          continue;
+        }
+
+        const currentProperties = documentUpdates.get(document.id) ?? {
+          ...toDocumentPropertyValues(document.properties ?? {}),
+        };
+        const nextProperties = documentUpdates.get(document.id) ?? {
+          ...currentProperties,
+        };
+        const normalized = sanitizeStoredPropertyValue(definition, row.value);
+        const nextValue =
+          normalized === null && definition.required
+            ? emptyPropertyValue(definition)
+            : normalized;
+
+        if (nextValue === null) {
+          delete nextProperties[definition.id];
+          rowsToDelete.push(row.id);
+        } else {
+          nextProperties[definition.id] = nextValue;
+
+          if (!isSameJSONValue(row.value, nextValue)) {
+            rowsToUpsert.push({
+              id: row.id,
+              documentId: row.documentId,
+              propertyDefinitionId: row.propertyDefinitionId,
+              value: nextValue,
+              teamId: row.teamId,
+              createdById: row.createdById,
+              lastModifiedById: userId,
+            });
+          }
+        }
+
+        if (!isSameJSONValue(currentProperties, nextProperties)) {
+          documentUpdates.set(document.id, nextProperties);
+        }
+      }
+
+      if (rowsToDelete.length > 0) {
+        await DocumentProperty.destroy({
+          where: {
+            id: rowsToDelete,
+          },
+          transaction,
+        });
+      }
+
+      if (rowsToUpsert.length > 0) {
+        await DocumentProperty.bulkCreate(rowsToUpsert, {
+          updateOnDuplicate: ["value", "lastModifiedById", "updatedAt"],
+          transaction,
+        });
+      }
+
+      await Promise.all(
+        Array.from(documentUpdates.entries()).map(([documentId, properties]) =>
+          Document.unscoped().update(
+            { properties },
+            {
+              where: {
+                id: documentId,
+              },
+              hooks: false,
+              silent: true,
+              transaction,
+            }
+          )
+        )
+      );
+
+      return {
+        processedDocuments: documentIds.length,
+        updatedDocuments: documentUpdates.size,
+        deletedRows: rowsToDelete.length,
+        upsertedRows: rowsToUpsert.length,
+        lastProcessedRowId: rows[rows.length - 1]?.id,
+      };
+    });
+
+    if (!chunk) {
+      break;
     }
 
-    snapshotsByDocumentId.set(
-      row.documentId,
-      createPropertySnapshot(definition, normalized)
-    );
-  }
-
-  if (rowsToDelete.length > 0) {
-    await DocumentProperty.destroy({
-      where: {
-        id: rowsToDelete,
-      },
-      transaction,
-    });
-  }
-
-  if (rowsToUpsert.length > 0) {
-    await DocumentProperty.bulkCreate(rowsToUpsert, {
-      updateOnDuplicate: ["value", "lastModifiedById", "updatedAt"],
-      transaction,
-    });
+    result.processedDocuments += chunk.processedDocuments;
+    result.updatedDocuments += chunk.updatedDocuments;
+    result.deletedRows += chunk.deletedRows;
+    result.upsertedRows += chunk.upsertedRows;
+    lastRowId = chunk.lastProcessedRowId;
   }
 
   await sequelize.query(
-    `UPDATE documents
-     SET properties = COALESCE(properties, '{}'::jsonb) - :propertyDefinitionId
-     WHERE "collectionId" = :collectionId
-       AND COALESCE(properties, '{}'::jsonb) ? :propertyDefinitionId`,
+    `UPDATE documents AS d
+     SET properties = COALESCE(d.properties, '{}'::jsonb) - :propertyDefinitionId
+     WHERE d."teamId" = :teamId
+       AND COALESCE(d.properties, '{}'::jsonb) ? :propertyDefinitionId
+       AND NOT EXISTS (
+         SELECT 1
+         FROM document_properties AS dp
+         WHERE dp."documentId" = d.id
+           AND dp."propertyDefinitionId" = :propertyDefinitionId
+       )`,
     {
       replacements: {
-        collectionId: definition.collectionId,
+        teamId: definition.teamId,
         propertyDefinitionId: definition.id,
       },
-      transaction,
     }
   );
 
-  await applyPropertySnapshotsToDocuments({
-    collectionId: definition.collectionId,
-    propertyDefinitionId: definition.id,
-    snapshots: Array.from(snapshotsByDocumentId.entries()),
-    transaction,
-  });
-}
-
-async function applyPropertySnapshotsToDocuments({
-  collectionId,
-  propertyDefinitionId,
-  snapshots,
-  transaction,
-}: {
-  collectionId: string;
-  propertyDefinitionId: string;
-  snapshots: [string, DocumentPropertySnapshot][];
-  transaction: Transaction;
-}) {
-  if (snapshots.length === 0) {
-    return;
-  }
-
-  const chunkSize = 200;
-
-  for (let i = 0; i < snapshots.length; i += chunkSize) {
-    const chunk = snapshots.slice(i, i + chunkSize);
-    const replacements: Record<string, string> = {
-      collectionId,
-      propertyDefinitionId,
-    };
-    const values = chunk
-      .map(([documentId, snapshot], index) => {
-        const documentKey = `documentId${index}`;
-        const snapshotKey = `snapshot${index}`;
-
-        replacements[documentKey] = documentId;
-        replacements[snapshotKey] = JSON.stringify(snapshot);
-
-        return `(CAST(:${documentKey} AS uuid), CAST(:${snapshotKey} AS jsonb))`;
-      })
-      .join(", ");
-
-    await sequelize.query(
-      `UPDATE documents AS d
-       SET properties = jsonb_set(
-         COALESCE(d.properties, '{}'::jsonb),
-         ARRAY[:propertyDefinitionId]::text[],
-         source.snapshot,
-         true
-       )
-       FROM (VALUES ${values}) AS source(document_id, snapshot)
-       WHERE d.id = source.document_id
-         AND d."collectionId" = :collectionId`,
-      {
-        replacements,
-        transaction,
-      }
-    );
-  }
+  return result;
 }
 
 function sanitizeStoredPropertyValue(
   definition: PropertyDefinition,
-  value: JSONValue | null
+  value: JSONValue | null,
+  validUserIds?: Set<string>
 ): JSONValue | null {
   if (value === null || value === undefined) {
     return null;
@@ -462,21 +547,33 @@ function sanitizeStoredPropertyValue(
 
   switch (definition.type) {
     case DocumentPropertyType.Text: {
-      return typeof value === "string" && value.length > 0 ? value : null;
+      return typeof value === "string" ? value : null;
     }
 
     case DocumentPropertyType.Number: {
+      if (value === "") {
+        return "";
+      }
+
       return typeof value === "number" && Number.isFinite(value) ? value : null;
     }
 
     case DocumentPropertyType.Date: {
+      if (value === "") {
+        return "";
+      }
+
       return typeof value === "string" && !Number.isNaN(Date.parse(value))
         ? value
         : null;
     }
 
     case DocumentPropertyType.Select: {
-      if (typeof value !== "string" || value.length === 0) {
+      if (value === "") {
+        return "";
+      }
+
+      if (typeof value !== "string") {
         return null;
       }
 
@@ -488,6 +585,10 @@ function sanitizeStoredPropertyValue(
         return null;
       }
 
+      if (value.length === 0) {
+        return [];
+      }
+
       const uniqueValidOptionIds = Array.from(
         new Set(value.filter((optionId) => optionsById.has(optionId)))
       );
@@ -495,18 +596,42 @@ function sanitizeStoredPropertyValue(
       return uniqueValidOptionIds.length > 0 ? uniqueValidOptionIds : null;
     }
 
+    case DocumentPropertyType.User: {
+      if (!isStringArray(value)) {
+        return null;
+      }
+
+      if (value.length === 0) {
+        return [];
+      }
+
+      const uniqueValidUserIds = Array.from(
+        new Set(
+          validUserIds
+            ? value.filter((userId) => validUserIds.has(userId))
+            : value
+        )
+      );
+
+      return uniqueValidUserIds.length > 0 ? uniqueValidUserIds : null;
+    }
+
     default:
       return null;
   }
 }
 
-function isSameJSONValue(left: JSONValue | null, right: JSONValue | null) {
+function isSameJSONValue(
+  left: JSONValue | DocumentProperties | null,
+  right: JSONValue | DocumentProperties | null
+) {
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
 function normalizePropertyValue(
   definition: PropertyDefinition,
-  value: JSONValue | null
+  value: JSONValue | null,
+  validUserIds?: Set<string>
 ): JSONValue | null {
   if (value === null) {
     return null;
@@ -522,10 +647,14 @@ function normalizePropertyValue(
         throw ValidationError(`Expected text value for "${definition.name}"`);
       }
 
-      return value.length > 0 ? value : null;
+      return value;
     }
 
     case DocumentPropertyType.Number: {
+      if (value === "") {
+        return "";
+      }
+
       if (typeof value !== "number" || !Number.isFinite(value)) {
         throw ValidationError(
           `Expected numeric value for "${definition.name}"`
@@ -536,6 +665,10 @@ function normalizePropertyValue(
     }
 
     case DocumentPropertyType.Date: {
+      if (value === "") {
+        return "";
+      }
+
       if (typeof value !== "string" || Number.isNaN(Date.parse(value))) {
         throw ValidationError(`Expected date value for "${definition.name}"`);
       }
@@ -549,7 +682,7 @@ function normalizePropertyValue(
       }
 
       if (value.length === 0) {
-        return null;
+        return "";
       }
 
       if (!optionsById.has(value)) {
@@ -567,7 +700,7 @@ function normalizePropertyValue(
       }
 
       if (value.length === 0) {
-        return null;
+        return [];
       }
 
       for (const optionId of value) {
@@ -579,9 +712,72 @@ function normalizePropertyValue(
       return Array.from(new Set(value));
     }
 
+    case DocumentPropertyType.User: {
+      if (!isStringArray(value)) {
+        throw ValidationError(`Expected user ID array for "${definition.name}"`);
+      }
+
+      if (value.length === 0) {
+        return [];
+      }
+
+      const uniqueUserIds = Array.from(new Set(value));
+
+      for (const userId of uniqueUserIds) {
+        if (!validUserIds?.has(userId)) {
+          throw ValidationError(`Invalid user ID for "${definition.name}"`);
+        }
+      }
+
+      return uniqueUserIds;
+    }
+
     default:
       throw ValidationError(`Unsupported property type "${definition.type}"`);
   }
+}
+
+function hydrateRequiredPropertyValue(
+  definition: PropertyDefinition,
+  value: JSONValue | null
+): JSONValue {
+  return value ?? emptyPropertyValue(definition);
+}
+
+function emptyPropertyValue(definition: PropertyDefinition): JSONValue {
+  switch (definition.type) {
+    case DocumentPropertyType.MultiSelect:
+    case DocumentPropertyType.User:
+      return [];
+    case DocumentPropertyType.Text:
+    case DocumentPropertyType.Number:
+    case DocumentPropertyType.Date:
+    case DocumentPropertyType.Select:
+      return "";
+    default:
+      return "";
+  }
+}
+
+async function resolveTeamUserIds(
+  teamId: string,
+  userIds: string[],
+  transaction?: Transaction
+) {
+  if (userIds.length === 0) {
+    return new Set<string>();
+  }
+
+  const users = await User.findAll({
+    attributes: ["id"],
+    where: {
+      id: userIds,
+      teamId,
+    },
+    transaction,
+  });
+
+  return new Set(users.map((user) => user.id));
 }
 
 function addUnique(items: string[], value: string) {
@@ -590,59 +786,32 @@ function addUnique(items: string[], value: string) {
   }
 }
 
+function removeValue(items: string[], value: string) {
+  const index = items.indexOf(value);
+
+  if (index >= 0) {
+    items.splice(index, 1);
+  }
+}
+
+function replaceUpsert(
+  upserts: DocumentPropertyUpdatePlan["upserts"],
+  next: DocumentPropertyUpdatePlan["upserts"][number]
+) {
+  const existing = upserts.findIndex(
+    (upsert) => upsert.propertyDefinitionId === next.propertyDefinitionId
+  );
+
+  if (existing >= 0) {
+    upserts[existing] = next;
+    return;
+  }
+
+  upserts.push(next);
+}
+
 function isStringArray(value: JSONValue): value is string[] {
   return (
     Array.isArray(value) && value.every((item) => typeof item === "string")
   );
-}
-
-function createPropertySnapshot(
-  definition: PropertyDefinition,
-  value: JSONValue
-): DocumentPropertySnapshot {
-  const snapshot: DocumentPropertySnapshot = {
-    definitionId: definition.id,
-    name: definition.name,
-    type: definition.type,
-    value,
-  };
-
-  if (
-    definition.type === DocumentPropertyType.Select &&
-    typeof value === "string"
-  ) {
-    const selected = definition.options?.find((option) => option.id === value);
-
-    if (selected) {
-      snapshot.options = [toOptionSnapshot(selected)];
-    }
-  }
-
-  if (
-    definition.type === DocumentPropertyType.MultiSelect &&
-    isStringArray(value)
-  ) {
-    const selected = value
-      .map((optionId) =>
-        definition.options?.find((option) => option.id === optionId)
-      )
-      .filter((option): option is PropertyDefinitionOption => !!option)
-      .map(toOptionSnapshot);
-
-    if (selected.length > 0) {
-      snapshot.options = selected;
-    }
-  }
-
-  return snapshot;
-}
-
-function toOptionSnapshot(
-  option: PropertyDefinitionOption
-): DocumentPropertyOptionSnapshot {
-  return {
-    id: option.id,
-    value: option.value,
-    color: option.color,
-  };
 }

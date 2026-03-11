@@ -35,11 +35,7 @@ class PropertyDefinition extends ParanoidModel {
 
   @Field
   @observable
-  required: boolean;
-
-  @Field
-  @observable
-  collectionId: string;
+  usageCount?: number;
 
   @Field
   @observable.shallow

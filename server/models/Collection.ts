@@ -71,6 +71,7 @@ import Group from "./Group";
 import GroupMembership from "./GroupMembership";
 import GroupUser from "./GroupUser";
 import Import from "./Import";
+import CollectionPropertyDefinition from "./CollectionPropertyDefinition";
 import PropertyDefinition from "./PropertyDefinition";
 import Team from "./Team";
 import User from "./User";
@@ -605,6 +606,9 @@ class Collection extends ParanoidModel<
 
   @HasMany(() => PropertyDefinition, "collectionId")
   propertyDefinitions: PropertyDefinition[];
+
+  @HasMany(() => CollectionPropertyDefinition, "collectionId")
+  collectionPropertyDefinitions: CollectionPropertyDefinition[];
 
   @BelongsToMany(() => User, () => UserMembership)
   users: User[];

@@ -45,6 +45,7 @@ const Integrations = lazy(() => import("~/scenes/Settings/Integrations"));
 const Members = lazy(() => import("~/scenes/Settings/Members"));
 const Notifications = lazy(() => import("~/scenes/Settings/Notifications"));
 const Preferences = lazy(() => import("~/scenes/Settings/Preferences"));
+const Properties = lazy(() => import("~/scenes/Settings/Properties"));
 const Profile = lazy(() => import("~/scenes/Settings/Profile"));
 const Security = lazy(() => import("~/scenes/Settings/Security"));
 const Shares = lazy(() => import("~/scenes/Settings/Shares"));
@@ -176,6 +177,15 @@ const useSettingsConfig = () => {
         enabled: can.createTemplate,
         group: t("Workspace"),
         icon: ShapesIcon,
+      },
+      {
+        name: t("Properties"),
+        path: settingsPath("properties"),
+        component: Properties.Component,
+        preload: Properties.preload,
+        enabled: can.update,
+        group: t("Workspace"),
+        icon: BuildingBlocksIcon,
       },
       {
         name: t("Emojis"),

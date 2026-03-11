@@ -27,6 +27,7 @@ export enum DocumentPropertyType {
   Date = "date",
   Select = "select",
   MultiSelect = "multi_select",
+  User = "user",
 }
 
 export enum DocumentPropertyFilterOperator {
@@ -42,32 +43,22 @@ export enum DocumentPropertyFilterOperator {
   Excludes = "excludes",
 }
 
-export interface DocumentPropertyOptionSnapshot {
-  id: string;
-  value: string;
-  color?: string | null;
-}
-
-export interface DocumentPropertySnapshot {
-  definitionId: string;
-  name: string;
-  type: DocumentPropertyType;
-  value: JSONValue;
-  options?: DocumentPropertyOptionSnapshot[];
-}
-
-export interface DocumentProperties {
-  [propertyDefinitionId: string]: DocumentPropertySnapshot;
+export enum CollectionPropertyDefinitionState {
+  Attached = "attached",
+  Excluded = "excluded",
 }
 
 export interface DocumentPropertyValues {
   [propertyDefinitionId: string]: JSONValue | null;
 }
 
+/**
+ * Canonical stored document property payload keyed by property definition ID.
+ */
+export interface DocumentProperties extends DocumentPropertyValues {}
+
 export interface DocumentPropertyFilter {
-  propertyDefinitionId?: string;
-  propertyName?: string;
-  propertyType?: DocumentPropertyType;
+  propertyDefinitionId: string;
   operator: DocumentPropertyFilterOperator;
   value?: JSONValue;
 }

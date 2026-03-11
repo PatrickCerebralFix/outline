@@ -48,7 +48,10 @@ import {
   OAuthClient,
   OAuthAuthentication,
   Relationship,
+  PropertyDefinition,
+  CollectionPropertyDefinition,
 } from "@server/models";
+import { CollectionPropertyDefinitionState, DocumentPropertyType } from "@shared/types";
 import { RelationshipType } from "@server/models/Relationship";
 import AttachmentHelper from "@server/models/helpers/AttachmentHelper";
 import { hash } from "@server/utils/crypto";
@@ -319,6 +322,61 @@ export async function buildCollection(
     createdById: overrides.userId,
     ...overrides,
   });
+}
+
+export async function buildPropertyDefinition(
+  overrides: Partial<PropertyDefinition> & { userId?: string } = {}
+) {
+  let collection = null;
+
+  if (overrides.collectionId) {
+    collection = await Collection.findByPk(overrides.collectionId, {
+      rejectOnEmpty: true,
+    });
+
+    if (!overrides.teamId) {
+      overrides.teamId = collection.teamId;
+    }
+  }
+
+  if (!overrides.teamId) {
+    const team = await buildTeam();
+    overrides.teamId = team.id;
+  }
+
+  if (!overrides.userId) {
+    const user = await buildUser({
+      teamId: overrides.teamId,
+    });
+    overrides.userId = user.id;
+  }
+
+  const collectionId = overrides.collectionId;
+  const required = overrides.required ?? false;
+  const { userId, ...definitionOverrides } = overrides;
+  const definition = await PropertyDefinition.create({
+    name: faker.lorem.words(2),
+    description: null,
+    type: DocumentPropertyType.Text,
+    createdById: userId,
+    lastModifiedById: userId,
+    ...definitionOverrides,
+  });
+
+  if (collectionId) {
+    await CollectionPropertyDefinition.create({
+      collectionId,
+      propertyDefinitionId: definition.id,
+      state: CollectionPropertyDefinitionState.Attached,
+      required,
+      index: "a0",
+      teamId: definition.teamId,
+      createdById: userId,
+      lastModifiedById: userId,
+    });
+  }
+
+  return definition;
 }
 
 export async function buildGroup(

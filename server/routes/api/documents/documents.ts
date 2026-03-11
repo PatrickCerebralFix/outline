@@ -30,6 +30,7 @@ import documentLoader from "@server/commands/documentLoader";
 import documentMover from "@server/commands/documentMover";
 import {
   applyDocumentPropertyUpdate,
+  clearDocumentProperties,
   prepareDocumentPropertyUpdate,
   toDocumentPropertyInput,
 } from "@server/commands/documentPropertyUpdater";
@@ -53,13 +54,14 @@ import {
   Attachment,
   Relationship,
   Collection,
-    Document,
-    DocumentProperty,
-    Event,
+  Document,
+  DocumentProperty,
+  Event,
   Revision,
   SearchQuery,
   User,
   View,
+  PropertyDefinition,
   UserMembership,
   Group,
   GroupUser,
@@ -90,6 +92,10 @@ import { RateLimiterStrategy } from "@server/utils/RateLimiter";
 import ZipHelper from "@server/utils/ZipHelper";
 import { convertBareUrlsToEmbedMarkdown } from "@server/utils/embeds";
 import { getTeamFromContext } from "@server/utils/passport";
+import {
+  attachPropertyDefinitionsToCollection,
+  resolveCollectionPropertyDefinitions,
+} from "@server/utils/collectionPropertyDefinitions";
 import { assertPresent } from "@server/validation";
 import pagination from "../middlewares/pagination";
 import * as T from "./schema";
@@ -99,6 +105,108 @@ import {
 } from "@server/commands/shareLoader";
 
 const router = new Router();
+
+async function resolveDocumentMoveTarget(
+  ctx: APIContext,
+  document: Document,
+  input: {
+    collectionId?: string | null;
+    parentDocumentId?: string | null;
+  }
+) {
+  const { user } = ctx.state.auth;
+  const { transaction } = ctx.state;
+  let collectionId = input.collectionId ?? null;
+
+  if (input.parentDocumentId) {
+    const parent = await Document.findByPk(input.parentDocumentId, {
+      userId: user.id,
+      transaction,
+    });
+    authorize(user, "update", parent);
+
+    if (!parent.publishedAt) {
+      throw InvalidRequestError("Cannot move document inside a draft");
+    }
+
+    collectionId = parent.collectionId ?? null;
+  } else if (collectionId) {
+    const collection = await Collection.findByPk(collectionId, {
+      userId: user.id,
+      transaction,
+    });
+    authorize(user, "updateDocument", collection);
+  } else if (document.template) {
+    authorize(user, "updateTemplate", user.team);
+  } else {
+    throw InvalidRequestError("collectionId is required to move a document");
+  }
+
+  return {
+    collectionId: collectionId ?? null,
+  };
+}
+
+async function buildDocumentMovePropertyImpact(options: {
+  document: Document;
+  destinationCollectionId: string | null;
+  transaction: APIContext["state"]["transaction"];
+}) {
+  const movedDocumentIds = [
+    options.document.id,
+    ...(await options.document.findAllChildDocumentIds()),
+  ];
+  const movedDocuments = await Document.unscoped().findAll({
+    attributes: ["id", "properties"],
+    where: {
+      id: movedDocumentIds,
+    },
+    transaction: options.transaction,
+    paranoid: false,
+  });
+  const propertyDefinitionIds = Array.from(
+    new Set(
+      movedDocuments.flatMap((document) => Object.keys(document.properties ?? {}))
+    )
+  );
+  const keepPropertyDefinitionIds = options.destinationCollectionId
+    ? (
+        await resolveCollectionPropertyDefinitions(
+          options.destinationCollectionId,
+          options.document.teamId,
+          options.transaction
+        )
+      ).effective.map((row) => row.propertyDefinitionId)
+    : [];
+  const keepSet = new Set(keepPropertyDefinitionIds);
+  const droppedPropertyDefinitionIds = propertyDefinitionIds.filter(
+    (propertyDefinitionId) => !keepSet.has(propertyDefinitionId)
+  );
+
+  const definitions =
+    droppedPropertyDefinitionIds.length > 0
+      ? await PropertyDefinition.findAll({
+          where: {
+            id: droppedPropertyDefinitionIds,
+            teamId: options.document.teamId,
+          },
+          transaction: options.transaction,
+        })
+      : [];
+  const namesById = new Map(
+    definitions.map((definition) => [definition.id, definition.name])
+  );
+
+  return {
+    propertyDefinitionIds,
+    keepPropertyDefinitionIds,
+    droppedPropertyDefinitionIds,
+    droppedPropertyNames: droppedPropertyDefinitionIds.map(
+      (propertyDefinitionId) =>
+        namesById.get(propertyDefinitionId) ?? propertyDefinitionId
+    ),
+  };
+}
 
 router.post(
   "documents.list",
@@ -1025,12 +1133,7 @@ router.post(
           replace: true,
         });
       } else {
-        await DocumentProperty.destroy({
-          where: {
-            documentId: document.id,
-          },
-          transaction,
-        });
+        await clearDocumentProperties([document.id], transaction);
       }
     } else {
       assertPresent(revisionId, "revisionId is required");
@@ -1341,6 +1444,38 @@ router.post(
 );
 
 router.post(
+  "documents.updateProperties",
+  auth(),
+  validate(T.DocumentsUpdatePropertiesSchema),
+  transaction(),
+  async (ctx: APIContext<T.DocumentsUpdatePropertiesReq>) => {
+    const { transaction } = ctx.state;
+    const { id, properties } = ctx.input.body;
+    const { user } = ctx.state.auth;
+
+    const document = await Document.findByPk(id, {
+      userId: user.id,
+      includeState: true,
+      transaction,
+    });
+    authorize(user, "update", document);
+
+    const plan = await prepareDocumentPropertyUpdate(ctx, document, properties);
+    document.properties = plan.properties;
+    document.lastModifiedById = user.id;
+    await document.saveWithCtx(ctx);
+    await applyDocumentPropertyUpdate(ctx, document, plan);
+
+    ctx.body = {
+      data: {
+        id: document.id,
+        properties: document.properties ?? {},
+      },
+    };
+  }
+);
+
+router.post(
   "documents.update",
   auth(),
   validate(T.DocumentsUpdateSchema),
@@ -1478,49 +1613,123 @@ router.post(
 );
 
 router.post(
-  "documents.move",
+  "documents.movePreview",
   auth(),
-  validate(T.DocumentsMoveSchema),
+  validate(T.DocumentsMovePreviewSchema),
   transaction(),
-  async (ctx: APIContext<T.DocumentsMoveReq>) => {
-    const { transaction } = ctx.state;
-    const { id, parentDocumentId, index } = ctx.input.body;
-    let collectionId = ctx.input.body.collectionId;
+  async (ctx: APIContext<T.DocumentsMovePreviewReq>) => {
+    const { id, parentDocumentId } = ctx.input.body;
     const { user } = ctx.state.auth;
+    const { transaction } = ctx.state;
     const document = await Document.findByPk(id, {
       userId: user.id,
       transaction,
     });
     authorize(user, "move", document);
 
-    if (parentDocumentId) {
-      const parent = await Document.findByPk(parentDocumentId, {
-        userId: user.id,
-        transaction,
-      });
-      authorize(user, "update", parent);
-      collectionId = parent.collectionId;
+    const { collectionId } = await resolveDocumentMoveTarget(ctx, document, {
+      collectionId: ctx.input.body.collectionId,
+      parentDocumentId,
+    });
+    const impact = await buildDocumentMovePropertyImpact({
+      document,
+      destinationCollectionId: collectionId,
+      transaction,
+    });
+    const destinationCollection = collectionId
+      ? await Collection.findByPk(collectionId, {
+          userId: user.id,
+          transaction,
+        })
+      : null;
 
-      if (!parent.publishedAt) {
-        throw InvalidRequestError("Cannot move document inside a draft");
+    ctx.body = {
+      data: {
+        preservedPropertyDefinitionIds: impact.propertyDefinitionIds.filter(
+          (propertyDefinitionId) =>
+            impact.keepPropertyDefinitionIds.includes(propertyDefinitionId)
+        ),
+        droppedPropertyDefinitionIds: impact.droppedPropertyDefinitionIds,
+        droppedPropertyNames: impact.droppedPropertyNames,
+        canAttachToDestination:
+          !!destinationCollection && !!can(user, "update", destinationCollection),
+        attachCandidates: impact.droppedPropertyDefinitionIds,
+      },
+    };
+  }
+);
+
+router.post(
+  "documents.move",
+  auth(),
+  validate(T.DocumentsMoveSchema),
+  transaction(),
+  async (ctx: APIContext<T.DocumentsMoveReq>) => {
+    const { transaction } = ctx.state;
+    const {
+      id,
+      parentDocumentId,
+      index,
+      confirmPropertyDrops,
+      attachPropertyDefinitionIds = [],
+    } = ctx.input.body;
+    const { user } = ctx.state.auth;
+    const document = await Document.findByPk(id, {
+      userId: user.id,
+      transaction,
+    });
+    authorize(user, "move", document);
+    const { collectionId } = await resolveDocumentMoveTarget(ctx, document, {
+      collectionId: ctx.input.body.collectionId,
+      parentDocumentId,
+    });
+    const destinationCollection = collectionId
+      ? await Collection.findByPk(collectionId, {
+          userId: user.id,
+          transaction,
+        })
+      : null;
+    const impact = await buildDocumentMovePropertyImpact({
+      document,
+      destinationCollectionId: collectionId,
+      transaction,
+    });
+
+    if (impact.droppedPropertyDefinitionIds.length > 0 && !confirmPropertyDrops) {
+      throw ValidationError(
+        "Moving this document would remove properties. Re-submit with confirmPropertyDrops."
+      );
+    }
+
+    if (attachPropertyDefinitionIds.length > 0) {
+      if (!destinationCollection) {
+        throw ValidationError(
+          "attachPropertyDefinitionIds can only be used when moving into a collection"
+        );
       }
-    } else if (collectionId) {
-      const collection = await Collection.findByPk(collectionId, {
+
+      authorize(user, "update", destinationCollection);
+      await attachPropertyDefinitionsToCollection({
+        collectionId: destinationCollection.id,
+        propertyDefinitionIds: attachPropertyDefinitionIds,
+        teamId: user.teamId,
         userId: user.id,
         transaction,
       });
-      authorize(user, "updateDocument", collection);
-    } else if (document.template) {
-      authorize(user, "updateTemplate", user.team);
-    } else {
-      throw InvalidRequestError("collectionId is required to move a document");
     }
+
+    const finalImpact = await buildDocumentMovePropertyImpact({
+      document,
+      destinationCollectionId: collectionId,
+      transaction,
+    });
 
     const { documents, collectionChanged } = await documentMover(ctx, {
       document,
       collectionId: collectionId ?? null,
       parentDocumentId,
       index,
+      keepPropertyDefinitionIds: finalImpact.keepPropertyDefinitionIds,
     });
 
     ctx.body = {
