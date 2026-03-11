@@ -2,7 +2,7 @@ import Router from "koa-router";
 import type { WhereOptions } from "sequelize";
 import { Op, Sequelize } from "sequelize";
 import type { UserPreferences } from "@shared/types";
-import { UserRole } from "@shared/types";
+import { NotificationEventType, UserRole } from "@shared/types";
 import { UserRoleHelper } from "@shared/utils/UserRoleHelper";
 import { settingsPath } from "@shared/utils/routeHelpers";
 import { UserValidation } from "@shared/validations";
@@ -366,6 +366,7 @@ router.post(
   (ctx: APIContext<T.UsersPromoteReq>) => {
     const forward = ctx as unknown as APIContext<T.UsersChangeRoleReq>;
     forward.input = {
+      ...ctx.input,
       body: {
         id: ctx.input.body.id,
         role: UserRole.Admin,
@@ -389,6 +390,7 @@ router.post(
   (ctx: APIContext<T.UsersDemoteReq>) => {
     const forward = ctx as unknown as APIContext<T.UsersChangeRoleReq>;
     forward.input = {
+      ...ctx.input,
       body: {
         id: ctx.input.body.id,
         role: ctx.input.body.to,
@@ -678,7 +680,13 @@ router.post(
   async (ctx: APIContext<T.UsersNotificationsSubscribeReq>) => {
     const { eventType } = ctx.input.body;
     const { user } = ctx.state.auth;
-    user.setNotificationEventType(eventType, true);
+    const eventTypes = eventType
+      ? [eventType]
+      : Object.values(NotificationEventType);
+
+    for (const type of eventTypes) {
+      user.setNotificationEventType(type, true);
+    }
 
     await user.saveWithCtx(ctx);
 
@@ -696,7 +704,13 @@ router.post(
   async (ctx: APIContext<T.UsersNotificationsUnsubscribeReq>) => {
     const { eventType } = ctx.input.body;
     const { user } = ctx.state.auth;
-    user.setNotificationEventType(eventType, false);
+    const eventTypes = eventType
+      ? [eventType]
+      : Object.values(NotificationEventType);
+
+    for (const type of eventTypes) {
+      user.setNotificationEventType(type, false);
+    }
 
     await user.saveWithCtx(ctx);
 

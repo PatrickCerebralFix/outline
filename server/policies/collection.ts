@@ -158,6 +158,18 @@ allow(
   }
 );
 
+allow(User, "createTemplate", Collection, (user, collection) =>
+  and(
+    !!collection,
+    !!collection?.isActive,
+    isTeamMutable(user),
+    or(
+      isTeamAdmin(user, collection),
+      includesMembership(collection, [CollectionPermission.Admin])
+    )
+  )
+);
+
 allow(User, ["update", "export", "archive"], Collection, (user, collection) =>
   and(
     !!collection,

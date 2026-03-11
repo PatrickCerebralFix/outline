@@ -49,7 +49,7 @@ import { ProsemirrorHelper } from "@shared/utils/ProsemirrorHelper";
 import { UrlHelper } from "@shared/utils/UrlHelper";
 import slugify from "@shared/utils/slugify";
 import { DocumentValidation } from "@shared/validations";
-import { ValidationError } from "@server/errors";
+import { InvalidRequestError, ValidationError } from "@server/errors";
 import { generateUrlId } from "@server/utils/url";
 import {
   pruneDocumentPropertiesToDefinitionIds,
@@ -79,6 +79,7 @@ import type { APIContext } from "@server/types";
 import { APIUpdateExtension } from "@server/collaboration/APIUpdateExtension";
 import { SkipChangeset } from "./decorators/Changeset";
 import type { HookContext } from "./base/Model";
+import Template from "./Template";
 
 export const DOCUMENT_VERSION = 2;
 
@@ -123,6 +124,7 @@ type AdditionalFindOptions = {
         [Op.is]: null,
       },
     },
+    template: false,
   },
   attributes: {
     include: [stateIfContentEmpty],
@@ -204,6 +206,7 @@ type AdditionalFindOptions = {
             userId,
           },
           required: false,
+          separate: true,
         },
         {
           association: "groupMemberships",
@@ -310,11 +313,11 @@ class Document extends ArchivableModel<
 
   @Default(false)
   @Column
-  template: boolean;
+  fullWidth: boolean;
 
   @Default(false)
   @Column
-  fullWidth: boolean;
+  template: boolean;
 
   @Column
   insightsEnabled: boolean;
@@ -460,7 +463,6 @@ class Document extends ArchivableModel<
     // and so never need to be updated when the title changes
     if (
       model.archivedAt ||
-      model.template ||
       !model.publishedAt ||
       !(
         model.changed("title") ||
@@ -487,12 +489,7 @@ class Document extends ArchivableModel<
 
   @AfterCreate
   static async addDocumentToCollectionStructure(model: Document) {
-    if (
-      model.archivedAt ||
-      model.template ||
-      !model.publishedAt ||
-      !model.collectionId
-    ) {
+    if (model.archivedAt || !model.publishedAt || !model.collectionId) {
       return;
     }
 
@@ -600,12 +597,18 @@ class Document extends ArchivableModel<
 
   @AfterUpdate
   static notifyCollaborationServer(model: Document, ctx: HookContext) {
-    if (model.changed("state") && ctx.transaction && ctx.auth?.user?.id) {
+    if (model.changed("state") && ctx.auth?.user?.id) {
       const actorId = ctx.auth.user.id;
-      const transaction = ctx.transaction.parent || ctx.transaction;
-      transaction.afterCommit(async () => {
+      const notify = async () => {
         await APIUpdateExtension.notifyUpdate(model.id, actorId);
-      });
+      };
+
+      if (ctx.transaction) {
+        const transaction = ctx.transaction.parent || ctx.transaction;
+        transaction.afterCommit(notify);
+      } else {
+        void notify();
+      }
     }
   }
 
@@ -650,10 +653,7 @@ class Document extends ArchivableModel<
   @Column(DataType.UUID)
   createdById: string;
 
-  @BelongsTo(() => Document, "templateId")
-  document: Document;
-
-  @ForeignKey(() => Document)
+  @ForeignKey(() => Template)
   @Column(DataType.UUID)
   templateId: string;
 
@@ -912,13 +912,6 @@ class Document extends ArchivableModel<
   }
 
   /**
-   * Returns whether this document is a template created at the workspace level.
-   */
-  get isWorkspaceTemplate() {
-    return this.template && !this.collectionId;
-  }
-
-  /**
    * Revert the state of the document to match the passed revision.
    *
    * @param revision The revision to revert to.
@@ -1046,7 +1039,7 @@ class Document extends ArchivableModel<
       this.collectionId = collectionId;
     }
 
-    if (!this.template && this.collectionId) {
+    if (this.collectionId) {
       const collection = await Collection.findByPk(this.collectionId, {
         includeDocumentStructure: true,
         transaction,
@@ -1107,10 +1100,12 @@ class Document extends ArchivableModel<
   };
 
   /**
+   * Unpublishes a published document, converting it back to a draft.
    *
-   * @param user User who is performing the action
-   * @param options.detach Whether to detach the document from the containing collection
-   * @returns Updated document
+   * @param ctx the API context.
+   * @param options.detach whether to detach the document from the containing collection.
+   * @returns updated document.
+   * @throws if the document has child documents.
    */
   unpublishWithCtx = async (ctx: APIContext, options: { detach: boolean }) => {
     // If the document is already a draft then calling unpublish should act like save
@@ -1121,11 +1116,21 @@ class Document extends ArchivableModel<
     const { user } = ctx.state.auth;
     const { transaction } = ctx.state;
 
+    const childDocumentIds = await this.findAllChildDocumentIds(
+      { archivedAt: { [Op.eq]: null } },
+      { transaction }
+    );
+    if (childDocumentIds.length > 0) {
+      throw InvalidRequestError(
+        "Cannot unpublish document with child documents"
+      );
+    }
+
     const collection = this.collectionId
       ? await Collection.findByPk(this.collectionId, {
           includeDocumentStructure: true,
           transaction,
-          lock: transaction.LOCK.UPDATE,
+          lock: transaction?.LOCK.UPDATE,
         })
       : undefined;
 
@@ -1220,7 +1225,7 @@ class Document extends ArchivableModel<
       }
     }
 
-    if (!this.template && this.publishedAt && collection?.isActive) {
+    if (this.publishedAt && collection?.isActive) {
       await collection.addDocumentToStructure(this, undefined, {
         includeArchived: true,
         transaction,
@@ -1270,7 +1275,7 @@ class Document extends ArchivableModel<
     this.sequelize.transaction(async (transaction: Transaction) => {
       let deleted = false;
 
-      if (!this.template && this.collectionId) {
+      if (this.collectionId) {
         const collection = await Collection.findByPk(this.collectionId!, {
           includeDocumentStructure: true,
           transaction,

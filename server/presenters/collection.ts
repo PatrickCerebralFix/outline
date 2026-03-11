@@ -41,15 +41,9 @@ export default async function presentCollection(
     description: asData ? undefined : collection.description,
     sort: collection.sort,
     icon: collection.icon,
-    index: collection.index,
     color: collection.color,
-    permission: collection.permission,
-    commenting: collection.commenting,
-    sharing: collection.sharing,
     createdAt: collection.createdAt,
     updatedAt: collection.updatedAt,
-    deletedAt: collection.deletedAt,
-    archivedAt: collection.archivedAt,
     archivedBy: undefined,
   };
 
@@ -58,6 +52,12 @@ export default async function presentCollection(
   }
 
   if (!options.isPublic) {
+    res.index = collection.index;
+    res.sharing = collection.sharing;
+    res.commenting = collection.commenting;
+    res.permission = collection.permission;
+    res.deletedAt = collection.deletedAt;
+    res.archivedAt = collection.archivedAt;
     res.archivedBy =
       collection.archivedBy && presentUser(collection.archivedBy);
     res.sourceMetadata = collection.sourceMetadata

@@ -312,11 +312,18 @@ export const MentionIssue = observer((props: IssuePrProps) => {
 
   const issue = unfurl as UnfurlResponse[UnfurlResourceType.Issue];
 
-  const url = new URL(issue.url);
-  const service =
-    url.hostname === "github.com"
-      ? IntegrationService.GitHub
-      : IntegrationService.Linear;
+  let service = IntegrationService.GitLab;
+  try {
+    const parsedUrl = new URL(issue.url);
+    service =
+      parsedUrl.hostname === "github.com"
+        ? IntegrationService.GitHub
+        : parsedUrl.hostname === "linear.app"
+          ? IntegrationService.Linear
+          : IntegrationService.GitLab;
+  } catch {
+    // Invalid URL in unfurl data, default to GitLab
+  }
 
   return (
     <a

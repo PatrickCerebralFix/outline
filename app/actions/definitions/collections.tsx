@@ -29,8 +29,8 @@ import DynamicCollectionIcon from "~/components/Icons/CollectionIcon";
 import { getHeaderExpandedKey } from "~/components/Sidebar/components/Header";
 import {
   createAction,
-  createActionWithChildren,
   createInternalLinkAction,
+  createActionWithChildren,
 } from "~/actions";
 import { ActiveCollectionSection, CollectionSection } from "~/actions/sections";
 import { setPersistedState } from "~/hooks/usePersistedState";
@@ -553,17 +553,11 @@ export const createTemplate = createInternalLinkAction({
   keywords: "new create template",
   visible: ({ getActivePolicies }) =>
     getActivePolicies(Collection).some(
-      (policy) => policy.abilities.createDocument
+      (policy) => policy.abilities.createTemplate
     ),
-  to: ({ getActiveModel, sidebarContext }) => {
+  to: ({ getActiveModel }) => {
     const collection = getActiveModel(Collection);
-    const [pathname, search] = newTemplatePath(collection?.id).split("?");
-
-    return {
-      pathname,
-      search,
-      state: { sidebarContext },
-    };
+    return newTemplatePath(collection?.id);
   },
 });
 

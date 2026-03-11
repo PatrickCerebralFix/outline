@@ -181,6 +181,7 @@ export enum IntegrationService {
   Matomo = "matomo",
   Umami = "umami",
   GitHub = "github",
+  GitLab = "gitlab",
   Linear = "linear",
   Figma = "figma",
   Notion = "notion",
@@ -197,11 +198,14 @@ export const ImportableIntegrationService = {
 
 export type IssueTrackerIntegrationService = Extract<
   IntegrationService,
-  IntegrationService.GitHub | IntegrationService.Linear
+  | IntegrationService.GitHub
+  | IntegrationService.GitLab
+  | IntegrationService.Linear
 >;
 
 export const IssueTrackerIntegrationService = {
   GitHub: IntegrationService.GitHub,
+  GitLab: IntegrationService.GitLab,
   Linear: IntegrationService.Linear,
 } as const;
 
@@ -212,6 +216,7 @@ export type UserCreatableIntegrationService = Extract<
   | IntegrationService.GoogleAnalytics
   | IntegrationService.Matomo
   | IntegrationService.Umami
+  | IntegrationService.GitLab
 >;
 
 export const UserCreatableIntegrationService = {
@@ -220,6 +225,7 @@ export const UserCreatableIntegrationService = {
   GoogleAnalytics: IntegrationService.GoogleAnalytics,
   Matomo: IntegrationService.Matomo,
   Umami: IntegrationService.Umami,
+  GitLab: IntegrationService.GitLab,
 } as const;
 
 export enum CollectionPermission {
@@ -244,6 +250,13 @@ export type IntegrationSettings<T> = T extends IntegrationType.Embed
       url?: string;
       github?: {
         installation: {
+          id: number;
+          account: { id: number; name: string; avatarUrl: string };
+        };
+      };
+      gitlab?: {
+        url?: string;
+        installation?: {
           id: number;
           account: { id: number; name: string; avatarUrl: string };
         };
@@ -282,6 +295,17 @@ export type IntegrationSettings<T> = T extends IntegrationType.Embed
                 | {
                     github?: {
                       installation: {
+                        id: number;
+                        account: {
+                          id?: number;
+                          name: string;
+                          avatarUrl?: string;
+                        };
+                      };
+                    };
+                    gitlab?: {
+                      url?: string;
+                      installation?: {
                         id: number;
                         account: {
                           id?: number;
@@ -402,6 +426,10 @@ export enum TeamPreference {
   PreventDocumentEmbedding = "preventDocumentEmbedding",
   /** Who can see user email addresses. */
   EmailDisplay = "emailDisplay",
+  /** Whether external MCP clients can connect to the workspace. */
+  MCP = "mcp",
+  /** List of disabled embed provider titles. */
+  DisabledEmbeds = "disabledEmbeds",
 }
 
 export type TeamPreferences = {
@@ -417,6 +445,8 @@ export type TeamPreferences = {
   [TeamPreference.TocPosition]?: TOCPosition;
   [TeamPreference.PreventDocumentEmbedding]?: boolean;
   [TeamPreference.EmailDisplay]?: EmailDisplay;
+  [TeamPreference.MCP]?: boolean;
+  [TeamPreference.DisabledEmbeds]?: string[];
 };
 
 export enum NavigationNodeType {
