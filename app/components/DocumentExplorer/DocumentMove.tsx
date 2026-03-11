@@ -3,15 +3,15 @@ import { useEffect, useMemo, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import styled from "styled-components";
-import { ellipsis } from "@shared/styles";
 import type { NavigationNode } from "@shared/types";
 import type Document from "~/models/Document";
 import Button from "~/components/Button";
-import DocumentExplorer from "~/components/DocumentExplorer";
 import Flex from "~/components/Flex";
 import Text from "~/components/Text";
 import useCollectionTrees from "~/hooks/useCollectionTrees";
 import useStores from "~/hooks/useStores";
+import { FlexContainer, Footer } from "./Components";
+import DocumentExplorer from "./DocumentExplorer";
 
 type Props = {
   document: Document;
@@ -147,7 +147,7 @@ function DocumentMove({ document }: Props) {
       />
       <Footer justify="space-between" align="center" gap={8}>
         <FooterText column gap={4}>
-          <StyledText type="secondary">
+          <Text ellipsis type="secondary">
             {selectedPath ? (
               <Trans
                 defaults="Move to <em>{{ location }}</em>"
@@ -161,7 +161,7 @@ function DocumentMove({ document }: Props) {
             ) : (
               t("Select a location to move")
             )}
-          </StyledText>
+          </Text>
           {!!selectedPath && droppedPropertyNames.length > 0 && (
             <>
               <Text type="secondary" size="small">
@@ -200,26 +200,8 @@ function DocumentMove({ document }: Props) {
   );
 }
 
-export const FlexContainer = styled(Flex)`
-  margin-left: -24px;
-  margin-right: -24px;
-  margin-bottom: -24px;
-  outline: none;
-`;
-
-export const Footer = styled(Flex)`
-  min-height: 64px;
-  border-top: 1px solid ${(props) => props.theme.horizontalRule};
-  padding: 16px 24px;
-`;
-
 const FooterText = styled(Flex)`
   min-width: 0;
-`;
-
-export const StyledText = styled(Text)`
-  ${ellipsis()}
-  margin-bottom: 0;
 `;
 
 const CheckboxRow = styled(Flex)`

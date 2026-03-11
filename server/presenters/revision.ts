@@ -5,23 +5,27 @@ import { DocumentHelper } from "@server/models/helpers/DocumentHelper";
 import { toDocumentPropertyValues } from "@server/utils/documentProperties";
 import presentUser from "./user";
 
-async function presentRevision(revision: Revision, html?: string) {
+async function presentRevision(revision: Revision) {
   // TODO: Remove this fallback once all revisions have been migrated
   const { emoji, strippedTitle } = parseTitle(revision.title);
+
+  const [data, text, collaborators] = await Promise.all([
+    DocumentHelper.toJSON(revision),
+    DocumentHelper.toMarkdown(revision),
+    revision.collaborators,
+  ]);
 
   return {
     id: revision.id,
     documentId: revision.documentId,
     title: strippedTitle,
     name: revision.name,
-    data: await DocumentHelper.toJSON(revision),
+    data,
+    text,
     icon: revision.icon ?? emoji,
     color: revision.color,
     properties: toDocumentPropertyValues(revision.properties ?? {}),
-    collaborators: (await revision.collaborators).map((user) =>
-      presentUser(user)
-    ),
-    html,
+    collaborators: collaborators.map((user) => presentUser(user)),
     createdAt: revision.createdAt,
     createdBy: presentUser(revision.user),
     createdById: revision.userId,

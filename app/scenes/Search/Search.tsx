@@ -264,6 +264,7 @@ function Search() {
   const { t } = useTranslation();
   const { documents, searches, collections, propertyDefinitions } =
     useStores();
+  const isMobile = useMobile();
 
   // routing
   const params = useQuery();
@@ -570,9 +571,22 @@ function Search() {
     query &&
     data?.length === 0 &&
     collectionResults.length === 0;
+  const sortInput =
+    filterVisibility.sort ? (
+      <SortInput
+        sort={sort}
+        direction={direction}
+        onSelect={(nextSort, nextDirection) =>
+          handleFilterChange({ sort: nextSort, direction: nextDirection })
+        }
+      />
+    ) : null;
 
   return (
-    <Scene textTitle={query ? `${query} – ${t("Search")}` : t("Search")}>
+    <Scene
+      textTitle={query ? `${query} – ${t("Search")}` : t("Search")}
+      actions={isMobile ? sortInput : null}
+    >
       <RegisterKeyDown trigger="Escape" handler={history.goBack} />
       {(loading || collectionLoading) && <LoadingIndicator />}
       <ResultsWrapper column auto>
@@ -598,7 +612,7 @@ function Search() {
 
           <FilterContainer>
             <PrimaryFilters>
-              <Flex align="center" gap={4}>
+              <Flex align="center" gap={4} wrap>
                 {filterVisibility.document && (
                   <DocumentFilter
                     document={document!}
@@ -646,6 +660,7 @@ function Search() {
                       handleFilterChange({ titleFilter: checked });
                     }}
                     checked={titleFilter}
+                    inForm={false}
                   />
                 )}
                 {filterVisibility.includeChildCollections && (
@@ -660,7 +675,7 @@ function Search() {
                   />
                 )}
               </Flex>
-              {filterVisibility.sort && (
+              {!isMobile && filterVisibility.sort && (
                 <SortInput
                   sort={sort}
                   direction={direction}
@@ -799,6 +814,7 @@ const PrimaryFilters = styled(HStack)`
 
 const ToggleFilter = styled(Switch)`
   white-space: nowrap;
+  margin-left: 8px;
   font-size: 14px;
   font-weight: 400;
 `;

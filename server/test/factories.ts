@@ -50,6 +50,7 @@ import {
   Relationship,
   PropertyDefinition,
   CollectionPropertyDefinition,
+  Template,
 } from "@server/models";
 import { CollectionPropertyDefinitionState, DocumentPropertyType } from "@shared/types";
 import { RelationshipType } from "@server/models/Relationship";

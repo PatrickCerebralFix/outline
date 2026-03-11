@@ -188,7 +188,7 @@ function SidebarLink(
           {unreadBadge && <UnreadBadge style={unreadStyle} />}
         </Content>
       </ContextMenu>
-      {menu && <Actions $showActions={showActions}>{menu}</Actions>}
+      {menu && <Actions $showActions={$showActions}>{menu}</Actions>}
     </Link>
   );
 }

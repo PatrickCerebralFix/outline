@@ -157,7 +157,7 @@ const CollectionLink: React.FC<Props> = ({
     (isOver && canDrop) || (isOverCollection && canDropCollection);
 
   return (
-    <ActionContextProvider value={{ activeCollectionId: collection.id }}>
+    <ActionContextProvider value={{ activeModels: [collection] }}>
       <Relative ref={mergeRefs([parentRef, dropDocumentRef, dropCollectionRef])}>
         <DropToImport collectionId={collection.id}>
           <SidebarLink
@@ -181,7 +181,7 @@ const CollectionLink: React.FC<Props> = ({
             icon={
               <CollectionIcon collection={collection} expanded={expanded} />
             }
-            showActions={menuOpen}
+            $showActions={menuOpen}
             isActiveDrop={isActiveDrop}
             isActive={(
               match,
