@@ -167,6 +167,13 @@ export default class Document extends ArchivableModel implements Searchable {
   fullWidth: boolean;
 
   /**
+   * Whether this document is itself a template.
+   */
+  @Field
+  @observable
+  template = false;
+
+  /**
    * Whether team members can see who has viewed this document.
    */
   @observable
@@ -421,6 +428,16 @@ export default class Document extends ArchivableModel implements Searchable {
   @computed
   get isFromTemplate(): boolean {
     return !!this.templateId;
+  }
+
+  @computed
+  get isTemplate(): boolean {
+    return this.template;
+  }
+
+  @computed
+  get isWorkspaceTemplate(): boolean {
+    return this.template && !this.collectionId;
   }
 
   @computed

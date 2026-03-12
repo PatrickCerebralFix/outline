@@ -31,6 +31,7 @@ import Text from "~/components/Text";
 import env from "~/env";
 import type Collection from "~/models/Collection";
 import usePaginatedRequest from "~/hooks/usePaginatedRequest";
+import useMobile from "~/hooks/useMobile";
 import useQuery from "~/hooks/useQuery";
 import useStores from "~/hooks/useStores";
 import type { SearchResult } from "~/types";

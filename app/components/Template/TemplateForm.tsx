@@ -4,6 +4,7 @@ import React, { useRef } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import styled from "styled-components";
 import type { ProsemirrorData } from "@shared/types";
+import type Document from "~/models/Document";
 import type Template from "~/models/Template";
 import Editor from "~/scenes/Document/components/Editor";
 import { DocumentContextProvider } from "~/components/DocumentContext";
@@ -32,7 +33,7 @@ export const TemplateForm = observer(function TemplateForm_({
     template.title = title;
   };
 
-  const handleChangeIcon = (icon: string, color: string) => {
+  const handleChangeIcon = (icon: string | null, color: string | null) => {
     template.icon = icon;
     template.color = color;
   };
@@ -76,7 +77,7 @@ export const TemplateForm = observer(function TemplateForm_({
           id={template.id}
           ref={ref}
           isDraft={false}
-          document={template}
+          document={template as unknown as Document}
           value={readOnly ? template.data : undefined}
           defaultValue={template.data}
           onFileUploadStart={handleStartUpload}
@@ -90,7 +91,9 @@ export const TemplateForm = observer(function TemplateForm_({
           canUpdate={can.update}
           autoFocus={template.createdAt === template.updatedAt}
           template
-        />
+        >
+          {null}
+        </Editor>
       </React.Suspense>
     </DocumentContextProvider>
   );

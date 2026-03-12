@@ -1,7 +1,7 @@
 import type { Optional } from "utility-types";
 import { ProsemirrorHelper as SharedProsemirrorHelper } from "@shared/utils/ProsemirrorHelper";
 import { TextHelper } from "@shared/utils/TextHelper";
-import { Document } from "@server/models";
+import { Document, Template } from "@server/models";
 import { DocumentHelper } from "@server/models/helpers/DocumentHelper";
 import { ProsemirrorHelper } from "@server/models/helpers/ProsemirrorHelper";
 import type { APIContext } from "@server/types";
@@ -38,7 +38,7 @@ type Props = Optional<
   state?: Buffer;
   publish?: boolean;
   index?: number;
-  templateDocument?: Document | null;
+  templateDocument?: Document | Template | null;
   properties?: DocumentPropertyInput;
   propertiesStrict?: boolean;
 };
@@ -122,9 +122,10 @@ export default async function documentCreator(
             )
         : ProsemirrorHelper.toProsemirror("").toJSON();
 
-  const templateProperties = templateDocument?.properties
-    ? toDocumentPropertyInput(templateDocument.properties)
-    : undefined;
+  const templateProperties =
+    templateDocument instanceof Document && templateDocument.properties
+      ? toDocumentPropertyInput(templateDocument.properties)
+      : undefined;
 
   const document = Document.build({
     id,

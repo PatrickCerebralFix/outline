@@ -695,6 +695,10 @@ class Document extends ArchivableModel<
   @HasMany(() => View)
   views: View[];
 
+  get isWorkspaceTemplate() {
+    return this.template && !this.collectionId;
+  }
+
   /**
    * Returns an array of unique userIds that are members of a document
    * either via group or direct membership.

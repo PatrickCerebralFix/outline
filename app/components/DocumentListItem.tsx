@@ -40,6 +40,7 @@ type Props = {
   showCollection?: boolean;
   showPublished?: boolean;
   showDraft?: boolean;
+  showTemplate?: boolean;
 };
 
 const SEARCH_RESULT_REGEX = /<b\b[^>]*>(.*?)<\/b>/gi;
@@ -76,6 +77,7 @@ function DocumentListItem(
     showCollection,
     showPublished,
     showDraft = true,
+    showTemplate: _showTemplate,
     highlight,
     context,
     ...rest

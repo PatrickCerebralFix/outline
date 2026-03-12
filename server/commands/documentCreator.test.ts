@@ -7,6 +7,7 @@ import {
   buildDocument,
   buildFileOperation,
   buildTemplate,
+  buildPropertyDefinition,
 } from "@server/test/factories";
 import { withAPIContext } from "@server/test/support";
 import documentCreator from "./documentCreator";
@@ -163,21 +164,20 @@ describe("documentCreator", () => {
       expect(document.publishedAt).toBeInstanceOf(Date);
     });
 
-    it("should hydrate required properties with null values on create", async () => {
+    it("should hydrate required text properties with empty strings on create", async () => {
       const user = await buildUser();
       const collection = await buildCollection({
         userId: user.id,
         teamId: user.teamId,
       });
-      const definition = await PropertyDefinition.create({
+      const definition = await buildPropertyDefinition({
         collectionId: collection.id,
         teamId: user.teamId,
         name: "Owner",
         description: null,
         type: DocumentPropertyType.Text,
         required: true,
-        createdById: user.id,
-        lastModifiedById: user.id,
+        userId: user.id,
       });
 
       const document = await withAPIContext(user, (ctx) =>
@@ -190,12 +190,7 @@ describe("documentCreator", () => {
       );
 
       expect(document.publishedAt).toBeInstanceOf(Date);
-      expect(document.properties[definition.id]).toEqual({
-        definitionId: definition.id,
-        name: definition.name,
-        type: definition.type,
-        value: null,
-      });
+      expect(document.properties[definition.id]).toEqual("");
     });
 
     it("should throw error when trying to publish without collection", async () => {
@@ -235,7 +230,7 @@ describe("documentCreator", () => {
       const document = await withAPIContext(user, (ctx) =>
         documentCreator(ctx, {
           title: "From Template",
-          template,
+          templateDocument: template,
           collectionId: collection.id,
         })
       );
@@ -263,7 +258,7 @@ describe("documentCreator", () => {
 
       const document = await withAPIContext(user, (ctx) =>
         documentCreator(ctx, {
-          template,
+          templateDocument: template,
           collectionId: collection.id,
         })
       );
@@ -289,7 +284,7 @@ describe("documentCreator", () => {
       await expect(
         withAPIContext(user, (ctx) =>
           documentCreator(ctx, {
-            template,
+            templateDocument: template,
             state: Buffer.from("some state"),
             collectionId: collection.id,
           })

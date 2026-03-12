@@ -17,6 +17,7 @@ import {
   InternetIcon,
   SmileyIcon,
   BrowserIcon,
+  BuildingBlocksIcon,
 } from "outline-icons";
 import { useEffect } from "react";
 import { useTranslation } from "react-i18next";

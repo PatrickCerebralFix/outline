@@ -429,6 +429,43 @@ export async function buildDraftDocument(
   return buildDocument({ ...overrides, publishedAt: null });
 }
 
+export async function buildTemplate(
+  overrides: Partial<Template> & { userId?: string; text?: string } = {}
+) {
+  if (!overrides.teamId) {
+    const team = await buildTeam();
+    overrides.teamId = team.id;
+  }
+
+  if (!overrides.userId) {
+    const user = await buildUser({
+      teamId: overrides.teamId,
+    });
+    overrides.userId = user.id;
+  }
+
+  if (overrides.collectionId === undefined) {
+    const collection = await buildCollection({
+      teamId: overrides.teamId,
+      userId: overrides.userId,
+    });
+    overrides.collectionId = collection.id;
+  }
+
+  const text = overrides.text ?? "This is the text in an example template";
+
+  return Template.create({
+    title: faker.lorem.words(4),
+    content: overrides.content ?? parser.parse(text)?.toJSON(),
+    publishedAt: new Date(),
+    lastModifiedById: overrides.userId,
+    createdById: overrides.userId,
+    editorVersion: "12.0.0",
+    template: true,
+    ...overrides,
+  });
+}
+
 export async function buildDocument(
   // Omission first, addition later?
   // This is actually a workaround to allow

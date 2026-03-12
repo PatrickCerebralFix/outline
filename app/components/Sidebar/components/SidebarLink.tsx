@@ -145,11 +145,6 @@ function SidebarLink(
     [onDisclosureClick, hasDisclosure]
   );
 
-  const linkActionProps = React.useMemo(
-    () => (to ? { onActiveClick: handleDisclosureClick } : {}),
-    [to, handleDisclosureClick]
-  );
-
   const DisclosureComponent = icon ? HiddenDisclosure : Disclosure;
 
   return (
@@ -170,7 +165,6 @@ function SidebarLink(
       href={href}
       className={className}
       ref={ref}
-      {...linkActionProps}
       {...rest}
     >
       <ContextMenu action={contextAction} ariaLabel={t("Link options")}>
@@ -188,7 +182,7 @@ function SidebarLink(
           {unreadBadge && <UnreadBadge style={unreadStyle} />}
         </Content>
       </ContextMenu>
-      {menu && <Actions $showActions={$showActions}>{menu}</Actions>}
+      {menu && <Actions $showActions={showActions}>{menu}</Actions>}
     </Link>
   );
 }

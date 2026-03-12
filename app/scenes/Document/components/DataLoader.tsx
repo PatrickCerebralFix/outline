@@ -86,7 +86,6 @@ function DataLoader({ match, children, location }: Props) {
     match.path === matchDocumentEdit || match.path.startsWith(settingsPath());
   const isEditing = isEditRoute || !user?.separateEditMode;
   const can = usePolicy(document);
-  const query = useQuery();
   const missingPolicy = !can || Object.keys(can).length === 0;
   const isDirectOpen = !location.state?.sidebarContext;
   const shouldForceDocumentFetch = missingPolicy || isDirectOpen;

@@ -117,7 +117,7 @@ describe("ImportJSONTask", () => {
             collections: new Map(data.collections.map((item) => [item.id, item])),
             documents: new Map(data.documents.map((item) => [item.id, item])),
             attachments: new Map(data.attachments.map((item) => [item.id, item])),
-          };
+          } as unknown as Awaited<ReturnType<ImportJSONTask["persistData"]>>;
         }
       );
     const response = await task.perform({

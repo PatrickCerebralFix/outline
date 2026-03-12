@@ -181,7 +181,7 @@ const CollectionLink: React.FC<Props> = ({
             icon={
               <CollectionIcon collection={collection} expanded={expanded} />
             }
-            $showActions={menuOpen}
+            showActions={menuOpen}
             isActiveDrop={isActiveDrop}
             isActive={(
               match,
